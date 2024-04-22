@@ -7,6 +7,7 @@ from stable_baselines.common.callbacks import EvalCallback, StopTrainingOnReward
 import argparse
 from stable_baselines.common.policies import MlpPolicy, MlpLstmPolicy, MlpLnLstmPolicy
 from functools import partialmethod
+import os
 
 
 
@@ -152,11 +153,11 @@ def main(args):
     save_name += ('_qd=' + str(args.quiz_disabled_steps)) if args.quiz_disabled_steps > 0 else ''
     save_name += ('_rs=' + str(args.reward_structure))
     save_name += ('_hs=' + str(args.holdout_strategy))
-
+    print(f'Saving model to {save_name}')
     if args.alg == 'a2c':
-        model = A2C(policy, env, verbose=1, tensorboard_log="./logs/{}".format(save_name))
+        model = A2C(policy, env, verbose=1, tensorboard_log="/network/scratch/l/lindongy/causal_overhypotheses/logs/{}".format(save_name))
     elif args.alg == 'ppo2':
-        model = PPO2(policy, env, verbose=1, tensorboard_log="./logs/{}".format(save_name))
+        model = PPO2(policy, env, verbose=1, tensorboard_log="/network/scratch/l/lindongy/causal_overhypotheses/logs/{}".format(save_name))
     else:
         raise ValueError('Unsupported algorithm: {}'.format(args.alg))
 
@@ -164,7 +165,8 @@ def main(args):
         total_timesteps=int(args.num_steps),
         callback=eval_callback
     )
-    model.save(save_name)
+    os.makedirs("/network/scratch/l/lindongy/causal_overhypotheses/model_output/{}".format(save_name), exist_ok=True)
+    model.save("/network/scratch/l/lindongy/causal_overhypotheses/model_output/{}/model".format(save_name))
 
 
 if __name__ == "__main__":
