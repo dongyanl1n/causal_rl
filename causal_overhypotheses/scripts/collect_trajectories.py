@@ -4,7 +4,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../envs'))
 import argparse
 from stable_baselines import A2C, PPO2
-from envs.causal_env_v0 import CausalEnv_v0
+from causal_env_v0 import CausalEnv_v0
 import tqdm
 import numpy as np
 import pickle
@@ -12,14 +12,15 @@ import pickle
 def main(args):
     print('Loading model...')
     # Load the model
-    if args.model_path is None:
+    model_path = "/network/scratch/l/lindongy/causal_overhypotheses/model_output/{}/model".format(args.model_name)
+    if args.model_name is None:
         model = None
-    elif 'a2c' in args.model_path:
-        model = A2C.load(args.model_path)
-    elif 'ppo2' in args.model_path:
-        model = PPO2.load(args.model_path)
+    elif 'a2c' in args.model_name:
+        model = A2C.load(model_path)
+    elif 'ppo2' in args.model_name:
+        model = PPO2.load(model_path)
     else:
-        raise ValueError('Unknown model type {}'.format(args.model))
+        raise ValueError('Unknown model type {}'.format(args.model_name))
 
     # Create an environment
     env = CausalEnv_v0({
@@ -70,17 +71,17 @@ def main(args):
 
     # Save the trajectories
     print('Saving Trajectories...')
-    with open(args.output_path, 'wb') as f:
+    output_path = "/network/scratch/l/lindongy/causal_overhypotheses/model_output/{}/trajectories.pkl".format(args.model_name)
+    with open(output_path, 'wb') as f:
         pickle.dump(trajectories, f)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Collect Trajectories from Causal Environments')
     parser.add_argument('--env', type=str, default='CausalEnv_v0', help='Environment to use')
-    parser.add_argument('--model_path', type=str, default=None, help='Path to model')
+    parser.add_argument('--model_name', type=str, default=None, help='save_name in driver.py')
     parser.add_argument('--num_trajectories', type=int, default=10000, help='Number of trajectories to collect')
     parser.add_argument('--max_steps', type=int, default=30, help='Maximum number of steps per trajectory')
     parser.add_argument('--quiz_disabled_steps', type=int, default=-1, help='Number of steps to disable quiz')
-    parser.add_argument('--output_path', type=str, default='trajectories.pkl', help='Path to output file')
 
     args = parser.parse_args()
 
