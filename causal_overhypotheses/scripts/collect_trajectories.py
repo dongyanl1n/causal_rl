@@ -24,7 +24,7 @@ def main(args):
 
     # Create an environment
     env = CausalEnv_v0({
-        "reward_structure":  "quiz-typeonly",
+        "reward_structure":  args.reward_structure,
         "quiz_disabled_steps": args.quiz_disabled_steps,
     })
 
@@ -34,6 +34,7 @@ def main(args):
     for i in tqdm.tqdm(range(args.num_trajectories)):
         # Reset the environment
         obs = env.reset()
+        gt = str(env._current_gt_hypothesis).split("'")[1].split('.')[-1]
 
         # Roll out the environment for n steps
         steps = []
@@ -42,7 +43,7 @@ def main(args):
             if model is not None:
                 # Because the environment is stacked, we have to extract x2
                 action = model.predict(np.stack([obs, obs, obs, obs]), deterministic=True)[0][0]
-            else:
+            else:  # Random action
                 action = env.action_space.sample()
 
 
@@ -62,6 +63,7 @@ def main(args):
         rewards = np.stack([step[2] for step in steps])
         terminals = np.stack([step[4] for step in steps])
         trajectories.append({
+            'gt': gt,
             'observations': observations,
             'next_observations': next_obeservations,
             'actions': actions,
@@ -71,7 +73,14 @@ def main(args):
 
     # Save the trajectories
     print('Saving Trajectories...')
-    output_path = "/network/scratch/l/lindongy/causal_overhypotheses/model_output/{}/trajectories.pkl".format(args.model_name)
+    if args.model_name is None:
+        save_name = "random_action"
+        save_name += ('_qd=' + str(args.quiz_disabled_steps)) if args.quiz_disabled_steps > 0 else ''
+        save_name += ('_rs=' + str(args.reward_structure))
+        os.makedirs('/network/scratch/l/lindongy/causal_overhypotheses/model_output/{}'.format(save_name), exist_ok=True)
+        output_path = "/network/scratch/l/lindongy/causal_overhypotheses/model_output/{}/trajectories.pkl".format(save_name)
+    else:
+        output_path = "/network/scratch/l/lindongy/causal_overhypotheses/model_output/{}/trajectories.pkl".format(args.model_name)
     with open(output_path, 'wb') as f:
         pickle.dump(trajectories, f)
 
@@ -82,7 +91,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_trajectories', type=int, default=10000, help='Number of trajectories to collect')
     parser.add_argument('--max_steps', type=int, default=30, help='Maximum number of steps per trajectory')
     parser.add_argument('--quiz_disabled_steps', type=int, default=-1, help='Number of steps to disable quiz')
-
+    parser.add_argument('--reward_structure', type=str, default='baseline', help='Reward structure')
     args = parser.parse_args()
-
+    print(args)
     main(args)
