@@ -145,4 +145,5 @@ if __name__ == "__main__":
     parser.add_argument('--discount', type=float, default=0.95, help='Discount factor')
     parser.add_argument('--epsilon', type=float, default=0.1, help='Eepsilon-greedy exploration rate')
     args = parser.parse_args()
+    print(args)
     main(args)

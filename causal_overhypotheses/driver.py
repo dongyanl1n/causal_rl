@@ -165,8 +165,8 @@ def main(args):
         total_timesteps=int(args.num_steps),
         callback=eval_callback
     )
-    os.makedirs("/network/scratch/l/lindongy/causal_overhypotheses/model_output/{}".format(save_name), exist_ok=True)
-    model.save("/network/scratch/l/lindongy/causal_overhypotheses/model_output/{}/model".format(save_name))
+    # os.makedirs("/network/scratch/l/lindongy/causal_overhypotheses/model_output/{}".format(save_name), exist_ok=True)
+    # model.save("/network/scratch/l/lindongy/causal_overhypotheses/model_output/{}/model".format(save_name))
 
 
 if __name__ == "__main__":
@@ -179,4 +179,5 @@ if __name__ == "__main__":
     parser.add_argument('--holdout_strategy', type=str, default='none', help='Holdout strategy')
     parser.add_argument('--reward_structure', type=str, default='quiz', help='Reward structure')
     args = parser.parse_args()
+    print(args)
     main(args)
