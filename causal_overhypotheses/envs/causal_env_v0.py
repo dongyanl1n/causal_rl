@@ -117,9 +117,11 @@ class CausalEnv_v0(gym.Env):
         self._detector_reward = env_config.get("detector_reward", 1)
         self._quiz_positive_reward = env_config.get("quiz_positive_reward", 1)
         self._quiz_negative_reward = env_config.get("quiz_negative_reward", -1)
-        self._max_steps = env_config.get("max_steps", 20)
+        self._max_baseline_steps = env_config.get("max_baseline_steps", 20)  # max number of steps agent can take to explore, before forced to enter quiz stage
         self._blicket_dim = env_config.get("blicket_dim", 3)
         self._quiz_disabled_steps = env_config.get("quiz_disabled_steps", -1)
+
+        assert self._max_baseline_steps >= self._quiz_disabled_steps, "Max baseline steps must be greater than quiz-disabled steps."
 
         # Gym environment setup
         self.action_space = (
@@ -172,6 +174,8 @@ class CausalEnv_v0(gym.Env):
         self._steps = 0
         self._observations = 0
         self._quiz_step = None
+        self.quiz_reward = 0
+        self.type_reward = 0
 
         self.reset()
 
@@ -185,6 +189,8 @@ class CausalEnv_v0(gym.Env):
         # Reset the step trackers
         self._steps = 0
         self._quiz_step = None
+        self.quiz_reward = 0
+        self.type_reward = 0
 
         # Get the baseline observation
         return self._get_observation(blickets=np.zeros(self._n_blickets))
@@ -292,7 +298,7 @@ class CausalEnv_v0(gym.Env):
                 reward -= self._step_reward_penalty
             if self._get_detector_state(action[: self._n_blickets]):
                 reward += self._detector_reward
-            done = self._steps > self._max_steps
+            done = self._steps > self._max_baseline_steps
 
         elif 'quiz' in self._reward_structure:
             if self._quiz_step is not None:
@@ -309,6 +315,8 @@ class CausalEnv_v0(gym.Env):
                         )
                         else self._quiz_negative_reward
                     )
+                    self.quiz_reward = reward
+                    self.type_reward = 0
                 elif self._reward_structure in ('quiz-type', 'quiz-typeonly'):
                     if self._quiz_step < self._n_blickets:
                         reward = (
@@ -321,12 +329,16 @@ class CausalEnv_v0(gym.Env):
                         )
                         else self._quiz_negative_reward
                     )
+                        self.quiz_reward = reward
+                        self.type_reward = 0
                     else:
                         reward = (
                             0.5
                             if (action[0] == 0 and issubclass(self._current_gt_hypothesis, ConjunctiveHypothesis) or action[0] == 1 and issubclass(self._current_gt_hypothesis, DisjunctiveHypothesis))
                             else -0.5
                         )
+                        self.quiz_reward = 0
+                        self.type_reward = reward
 
 
 
@@ -342,7 +354,7 @@ class CausalEnv_v0(gym.Env):
                         done = True
             else:
                 # Check the action to see if we should go to quiz phase
-                if self._steps > self._max_steps or (action[-1] == 1 and self._steps > self._quiz_disabled_steps):
+                if (self._steps > self._max_baseline_steps) or (action[-1] == 1 and self._steps > self._quiz_disabled_steps):
 
                     if self._add_step_reward_penalty:
                         reward -= self._step_reward_penalty
@@ -363,3 +375,16 @@ class CausalEnv_v0(gym.Env):
 
         self._steps += 1
         return observation, reward, done, info
+    
+
+    def get_quiz_reward(self):
+        """
+        Return the current quiz reward
+        """
+        return self.quiz_reward
+
+    def get_type_reward(self):
+        """
+        Return the current type reward
+        """
+        return self.type_reward
