@@ -93,5 +93,6 @@ if __name__ == '__main__':
     parser.add_argument('--quiz_disabled_steps', type=int, default=-1, help='Number of steps to disable quiz')
     parser.add_argument('--reward_structure', type=str, default='baseline', help='Reward structure')
     args = parser.parse_args()
-    print(args)
+    argsdict = args.__dict__
+    print(argsdict)
     main(args)
