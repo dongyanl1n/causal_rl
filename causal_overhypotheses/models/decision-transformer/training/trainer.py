@@ -19,7 +19,7 @@ class Trainer:
 
         self.start_time = time.time()
 
-    def train_iteration(self, num_steps, iter_num=0, print_logs=False):
+    def train_iteration(self, num_steps, iter_num=0, print_logs=False, save_eval_traj=False):
 
         train_losses = []
         logs = dict()
@@ -39,7 +39,7 @@ class Trainer:
 
         self.model.eval()
         for eval_fn in self.eval_fns:
-            outputs = eval_fn(self.model)
+            outputs = eval_fn(self.model, iter_num, save_eval_traj)
             for k, v in outputs.items():
                 logs[f'evaluation/{k}'] = v
 
