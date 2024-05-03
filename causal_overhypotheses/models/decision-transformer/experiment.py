@@ -1,18 +1,20 @@
 import gym
 import numpy as np
 import torch
+import torch.nn.functional as F
 import wandb
 
 import argparse
 import pickle
 import random
 import sys
+import os
 
-from decision_transformer.evaluation.evaluate_episodes import evaluate_episode, evaluate_episode_rtg
-from decision_transformer.models.decision_transformer import DecisionTransformer
-from decision_transformer.models.mlp_bc import MLPBCModel
-from decision_transformer.training.act_trainer import ActTrainer
-from decision_transformer.training.seq_trainer import SequenceTrainer
+from evaluation.evaluate_episodes import evaluate_episode, evaluate_episode_rtg
+from models.decision_transformer import DecisionTransformer
+from models.mlp_bc import MLPBCModel
+from training.act_trainer import ActTrainer
+from training.seq_trainer import SequenceTrainer
 
 
 def discount_cumsum(x, gamma):
@@ -29,6 +31,7 @@ def experiment(
 ):
     device = variant.get("device", "cuda")
     log_to_wandb = variant.get("log_to_wandb", False)
+    save_eval_traj = variant.get("save_eval_traj", False)
 
     env_name, dataset = variant["env"], variant["dataset"]
     model_type = variant["model_type"]
@@ -51,14 +54,15 @@ def experiment(
         env_targets = [5000, 2500]
         scale = 1000.0
     elif env_name == "reacher2d":
-        from decision_transformer.envs.reacher_2d import Reacher2dEnv
+        from envs.reacher_2d import Reacher2dEnv
 
         env = Reacher2dEnv()
         max_ep_len = 100
         env_targets = [76, 40]
         scale = 10.0
     elif env_name == "causal":
-        from decision_transformer.envs.causal import CausalEnv_v0
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../envs'))
+        from causal_env_v0 import CausalEnv_v0
 
         env = CausalEnv_v0(
             {
@@ -66,11 +70,12 @@ def experiment(
             }
         )
         # TODO: Determine both of these values (probably not right now :/)
-        max_ep_len = 30
+        max_ep_len = 40
         env_targets = [3, -3]
         scale = 1.0
     elif env_name == "qcausal":
-        from decision_transformer.envs.causal import CausalEnv_v0
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../envs'))
+        from causal_env_v0 import CausalEnv_v0
 
         env = CausalEnv_v0(
             {
@@ -78,7 +83,7 @@ def experiment(
             }
         )
         # TODO: Determine both of these values (probably not right now :/)
-        max_ep_len = 30
+        max_ep_len = 40  # used tfor timestep embedding in DT and evaluating episode. It's ok to overshoot
         env_targets = [0.5]
         scale = 1.0
     else:
@@ -127,7 +132,7 @@ def experiment(
 
     # only train on top pct_traj trajectories (for %BC experiment)
     num_timesteps = max(int(pct_traj * num_timesteps), 1)
-    sorted_inds = np.argsort(returns)  # lowest to highest
+    sorted_inds = np.argsort(returns)  # ranking trajectories from lowest to highest return
     num_trajectories = 1
     timesteps = traj_lens[sorted_inds[-1]]
     ind = len(trajectories) - 2
@@ -135,23 +140,26 @@ def experiment(
         timesteps += traj_lens[sorted_inds[ind]]
         num_trajectories += 1
         ind -= 1
-    sorted_inds = sorted_inds[-num_trajectories:]
+    sorted_inds = sorted_inds[-num_trajectories:] # ranking trajectories from lowest to highest return
 
     # used to reweight sampling so we sample according to timesteps instead of trajectories
-    p_sample = traj_lens[sorted_inds] / sum(traj_lens[sorted_inds])
+    p_sample = traj_lens[sorted_inds] / sum(traj_lens[sorted_inds])  # 1. sort trajectories by return 2. normalize their lengths
 
     def get_batch(batch_size=256, max_len=K):
         batch_inds = np.random.choice(
             np.arange(num_trajectories),
             size=batch_size,
             replace=True,
-            p=p_sample,  # reweights so we sample according to timesteps
-        )
+            p=p_sample,  # reweights so we sample according to timesteps  # longer trajectory has higher probability of being sampled
+        )  # sample batch_size trajectories
+        # what you sample is not real trajectory index, but where on sorted_inds ranking does the sampled trajectory sit
 
-        s, a, r, d, rtg, timesteps, mask = [], [], [], [], [], [], []
+        s, a, r, d, rtg, timesteps, mask, gts = [], [], [], [], [], [], [], []
         for i in range(batch_size):
             traj = trajectories[int(sorted_inds[batch_inds[i]])]
-            si = random.randint(0, traj["rewards"].shape[0] - 1)
+            gts.append(traj['gt'])
+            # si = random.randint(0, traj["rewards"].shape[0] - 1)  # sample starting index
+            si = 0
 
             # get sequences from dataset
             s.append(traj["observations"][si : si + max_len].reshape(1, -1, state_dim))
@@ -185,16 +193,16 @@ def experiment(
         rtg = torch.from_numpy(np.concatenate(rtg, axis=0)).to(dtype=torch.float32, device=device)
         timesteps = torch.from_numpy(np.concatenate(timesteps, axis=0)).to(dtype=torch.long, device=device)
         mask = torch.from_numpy(np.concatenate(mask, axis=0)).to(device=device)
-
-        return s, a, r, d, rtg, timesteps, mask
+        return s, a, r, d, rtg, timesteps, mask, gts
 
     def eval_episodes(target_rew):
-        def fn(model):
+        def fn(model, iter_num, save_eval_traj=False):
             returns, lengths = [], []
+            eval_trajectories = []
             for _ in range(num_eval_episodes):
                 with torch.no_grad():
                     if model_type == "dt":
-                        ret, length = evaluate_episode_rtg(
+                        ret, length, act, state, rew, tgt_ret, gt = evaluate_episode_rtg(
                             env,
                             state_dim,
                             act_dim,
@@ -222,6 +230,22 @@ def experiment(
                         )
                 returns.append(ret)
                 lengths.append(length)
+                if model_type == "dt" and save_eval_traj:
+                    # To analyze DT behaviours, save these for visualization
+                    eval_trajectories.append({
+                            'gt': gt,
+                            'observations': state,
+                            'actions': act,
+                            'rewards': rew,
+                            'target_returns': tgt_ret,
+                            'returns': ret,
+                            'length': length
+                        })
+            if not os.path.exists(f"/network/scratch/l/lindongy/causal_overhypotheses/dt_trajectories/{dataset}"):
+                os.makedirs(f"/network/scratch/l/lindongy/causal_overhypotheses/dt_trajectories/{dataset}", exist_ok=True)
+            output_path = f"/network/scratch/l/lindongy/causal_overhypotheses/dt_trajectories/{dataset}/targetreturn{target_rew}_iteration{iter_num}.pkl"
+            with open(output_path, 'wb') as f:
+                pickle.dump(eval_trajectories, f)
             return {
                 f"target_{target_rew}_return_mean": np.mean(returns),
                 f"target_{target_rew}_return_std": np.std(returns),
@@ -274,7 +298,8 @@ def experiment(
             batch_size=batch_size,
             get_batch=get_batch,
             scheduler=scheduler,
-            loss_fn=lambda s_hat, a_hat, r_hat, s, a, r: torch.mean((a_hat - a) ** 2),
+            loss_fn=lambda s_hat, a_hat, r_hat, s, a, r: torch.mean((a_hat - a) ** 2),  # MSE for continuous action, CE for discrete action
+            # loss_fn=lambda s_hat, a_hat, r_hat, s, a, r: F.binary_cross_entropy(a_hat, a),
             eval_fns=[eval_episodes(tar) for tar in env_targets],
         )
     elif model_type == "bc":
@@ -289,23 +314,23 @@ def experiment(
         )
 
     if log_to_wandb:
-        wandb.init(name=exp_prefix, group=group_name, project="decision-transformer", config=variant)
-        # wandb.watch(model)  # wandb has some bug
+        wandb.init(entity='dongyanl1n', name=exp_prefix, group=group_name, project="causalrl-decision-transformer", config=variant, dir='/network/scratch/l/lindongy/causal_overhypotheses/dt_wandb')
+        # wandb.watch(model)
 
     for iter in range(variant["max_iters"]):
-        outputs = trainer.train_iteration(num_steps=variant["num_steps_per_iter"], iter_num=iter + 1, print_logs=True)
+        outputs = trainer.train_iteration(num_steps=variant["num_steps_per_iter"], iter_num=iter + 1, print_logs=True, save_eval_traj=save_eval_traj)
         if log_to_wandb:
             wandb.log(outputs)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--env", type=str, default="hopper")
-    parser.add_argument("--dataset", type=str, default="medium")  # medium, medium-replay, medium-expert, expert
+    parser.add_argument("--env", type=str, default="causal")
+    parser.add_argument("--dataset", type=str, default="random30steps")
     parser.add_argument("--mode", type=str, default="normal")  # normal for standard setting, delayed for sparse
-    parser.add_argument("--K", type=int, default=20)
+    parser.add_argument("--K", type=int, default=20)  # context length for DT/BC
     parser.add_argument("--pct_traj", type=float, default=1.0)
-    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--model_type", type=str, default="dt")  # dt for decision transformer, bc for behavior cloning
     parser.add_argument("--embed_dim", type=int, default=128)
     parser.add_argument("--n_layer", type=int, default=3)
@@ -320,7 +345,9 @@ if __name__ == "__main__":
     parser.add_argument("--num_steps_per_iter", type=int, default=10000)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--log_to_wandb", "-w", type=bool, default=False)
+    parser.add_argument("--save_eval_traj", "-s", type=bool, default=False)
 
     args = parser.parse_args()
-
+    argsdict = args.__dict__
+    print(argsdict)
     experiment("gym-experiment", variant=vars(args))
