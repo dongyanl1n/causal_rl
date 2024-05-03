@@ -83,6 +83,7 @@ def evaluate_episode_rtg(
     state_std = torch.from_numpy(state_std).to(device=device)
 
     state = env.reset()
+    gt = str(env._current_gt_hypothesis).split("'")[1].split('.')[-1]
     if mode == 'noise':
         state = state + np.random.normal(0, 0.1, size=state.shape)
 
@@ -137,4 +138,4 @@ def evaluate_episode_rtg(
         if done:
             break
 
-    return episode_return, episode_length
+    return episode_return, episode_length, actions, states, rewards, target_return, gt  # for one evaluation episode
