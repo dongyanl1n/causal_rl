@@ -57,7 +57,11 @@ if __name__ == "__main__":
             num_exploration_steps = []
             for act in actions_for_gt:  # Assuming each act is a array of shape [epi_length, action_dim]
                 # count where the first 1 appears in the last dimension of action
-                idx_first_1 = np.where(act[:, -1] == 1)[0][0]
+                indices = np.where(act[:, -1] == 1)[0]
+                if indices.size > 0:  # If there are indices where the value is 1
+                    idx_first_1 = indices[0]
+                else:  # If there is no 1 in the array
+                    idx_first_1 = len(act)  # Use the length of the episode
                 num_exploration_steps.append(idx_first_1)
             mean_exploration_steps = np.mean(num_exploration_steps)
             print(f"Mean number of exploration steps: {mean_exploration_steps}")
