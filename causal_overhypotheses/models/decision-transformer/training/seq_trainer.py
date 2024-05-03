@@ -1,14 +1,16 @@
 import numpy as np
 import torch
+import torch.nn.functional as F
 
-from decision_transformer.training.trainer import Trainer
+from training.trainer import Trainer
 
 
 class SequenceTrainer(Trainer):
 
     def train_step(self):
-        states, actions, rewards, dones, rtg, timesteps, attention_mask = self.get_batch(self.batch_size)
+        states, actions, rewards, dones, rtg, timesteps, attention_mask, gts = self.get_batch(self.batch_size)
         action_target = torch.clone(actions)
+        # To debug trajectories, check loaded data including gts
 
         state_preds, action_preds, reward_preds = self.model.forward(
             states, actions, rewards, rtg[:,:-1], timesteps, attention_mask=attention_mask,
@@ -30,5 +32,5 @@ class SequenceTrainer(Trainer):
 
         with torch.no_grad():
             self.diagnostics['training/action_error'] = torch.mean((action_preds-action_target)**2).detach().cpu().item()
-
+            # self.diagnostics['training/action_error'] = F.binary_cross_entropy(action_preds, action_target).detach().cpu().item()
         return loss.detach().cpu().item()
