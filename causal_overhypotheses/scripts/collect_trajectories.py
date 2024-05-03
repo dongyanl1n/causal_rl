@@ -4,11 +4,42 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../envs'))
 import argparse
 from stable_baselines import A2C, PPO2
-from causal_env_v0 import CausalEnv_v0
+from causal_env_v0 import CausalEnv_v0, ABconj, ACconj, BCconj, Adisj, Bdisj, Cdisj
 import tqdm
 import numpy as np
 import pickle
 
+hypotheses = {
+    'disjunctive_train': [
+                ABconj,
+                ACconj,
+                BCconj,
+            ],
+    'conjunctive_train': [
+                Adisj,
+                Bdisj,
+                Cdisj,
+            ],
+    'disjunctive_loo': [
+                Cdisj,
+            ],
+    'conjuntive_loo': [
+                BCconj,
+            ],
+    'both_loo': [
+                Cdisj,
+                BCconj,
+            ],
+    'none': [
+                ABconj,
+                ACconj,
+                BCconj,
+                Adisj,
+                Bdisj,
+                Cdisj,
+            
+    ]
+}
 def main(args):
     print('Loading model...')
     # Load the model
@@ -26,6 +57,7 @@ def main(args):
     env = CausalEnv_v0({
         "reward_structure":  args.reward_structure,
         "quiz_disabled_steps": args.quiz_disabled_steps,
+        "hypotheses": hypotheses[args.holdout_strategy]
     })
 
     # Roll out the environment for k trajectories
@@ -92,6 +124,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_steps', type=int, default=30, help='Maximum number of steps per trajectory')
     parser.add_argument('--quiz_disabled_steps', type=int, default=-1, help='Number of steps to disable quiz')
     parser.add_argument('--reward_structure', type=str, default='baseline', help='Reward structure')
+    parser.add_argument('--holdout_strategy', type=str, default='none', help='Holdout strategy')
     args = parser.parse_args()
     argsdict = args.__dict__
     print(argsdict)
