@@ -52,7 +52,8 @@ if __name__ == "__main__":
             print(f"Actions consistent across trajectories for GT {gt}: {actions_consistent}")
             # if all actions are the same, print what action it is
             if actions_consistent:
-                print(f"Actions: {actions_for_gt[0]}")
+                print(f"Actions: ")
+                print(f"{actions_for_gt[0]}")
             num_exploration_steps = []
             for act in actions_for_gt:  # Assuming each act is a array of shape [epi_length, action_dim]
                 # count where the first 1 appears in the last dimension of action
