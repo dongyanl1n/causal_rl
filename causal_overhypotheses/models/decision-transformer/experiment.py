@@ -3,12 +3,13 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import wandb
-
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../envs'))
+from causal_env_v0 import CausalEnv_v0, ABconj, ACconj, BCconj, Adisj, Bdisj, Cdisj
 import argparse
 import pickle
 import random
-import sys
-import os
 
 from evaluation.evaluate_episodes import evaluate_episode, evaluate_episode_rtg
 from models.decision_transformer import DecisionTransformer
@@ -16,6 +17,73 @@ from models.mlp_bc import MLPBCModel
 from training.act_trainer import ActTrainer
 from training.seq_trainer import SequenceTrainer
 
+train_hypotheses = {
+    'disjunctive_train': [
+                        Adisj,
+                        Bdisj,
+                        Cdisj,
+                    ],
+    'conjunctive_train': [
+                        ABconj,
+                        ACconj,
+                        BCconj,
+                    ],
+    'disjunctive_loo': [
+                        Adisj,
+                        Bdisj,
+                    ],
+    'conjunctive_loo': [
+                        ABconj,
+                        ACconj,
+                    ],
+    'both_loo': [
+                        ABconj,
+                        ACconj,
+                        Adisj,
+                        Bdisj,
+                    ],
+    'none': [
+                ABconj,
+                ACconj,
+                BCconj,
+                Adisj,
+                Bdisj,
+                Cdisj,
+            
+    ]
+}
+
+eval_hypotheses = {
+    'disjunctive_train': [
+                ABconj,
+                ACconj,
+                BCconj,
+            ],
+    'conjunctive_train': [
+                Adisj,
+                Bdisj,
+                Cdisj,
+            ],
+    'disjunctive_loo': [
+                Cdisj,
+            ],
+    'conjunctive_loo': [
+                BCconj,
+            ],
+    'both_loo': [
+                Cdisj,
+                BCconj,
+            ],
+    'none': [
+                ABconj,
+                ACconj,
+                BCconj,
+                Adisj,
+                Bdisj,
+                Cdisj,
+            
+    ]
+}
 
 def discount_cumsum(x, gamma):
     discount_cumsum = np.zeros_like(x)
@@ -61,25 +129,23 @@ def experiment(
         env_targets = [76, 40]
         scale = 10.0
     elif env_name == "causal":
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../envs'))
-        from causal_env_v0 import CausalEnv_v0
-
+        
         env = CausalEnv_v0(
             {
                 "reward_structure": "quiz",
+                "hypotheses": eval_hypotheses[args.holdout_strategy]
             }
-        )
+        )  # env only used for evaluation
         # TODO: Determine both of these values (probably not right now :/)
         max_ep_len = 40
         env_targets = [3, -3]
         scale = 1.0
     elif env_name == "qcausal":
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../envs'))
-        from causal_env_v0 import CausalEnv_v0
 
         env = CausalEnv_v0(
             {
                 "reward_structure": "quiz-typeonly",
+                "hypotheses": eval_hypotheses[args.holdout_strategy]
             }
         )
         # TODO: Determine both of these values (probably not right now :/)
@@ -243,9 +309,10 @@ def experiment(
                         })
             if not os.path.exists(f"/network/scratch/l/lindongy/causal_overhypotheses/dt_trajectories/{dataset}"):
                 os.makedirs(f"/network/scratch/l/lindongy/causal_overhypotheses/dt_trajectories/{dataset}", exist_ok=True)
-            output_path = f"/network/scratch/l/lindongy/causal_overhypotheses/dt_trajectories/{dataset}/targetreturn{target_rew}_iteration{iter_num}.pkl"
-            with open(output_path, 'wb') as f:
-                pickle.dump(eval_trajectories, f)
+            if save_eval_traj and abs(np.mean(returns) - target_rew) < 1.5:
+                output_path = f"/network/scratch/l/lindongy/causal_overhypotheses/dt_trajectories/{dataset}/return{np.mean(returns)}_targetreturn{target_rew}_iteration{iter_num}.pkl"
+                with open(output_path, 'wb') as f:
+                    pickle.dump(eval_trajectories, f)
             return {
                 f"target_{target_rew}_return_mean": np.mean(returns),
                 f"target_{target_rew}_return_std": np.std(returns),
@@ -298,8 +365,7 @@ def experiment(
             batch_size=batch_size,
             get_batch=get_batch,
             scheduler=scheduler,
-            loss_fn=lambda s_hat, a_hat, r_hat, s, a, r: torch.mean((a_hat - a) ** 2),  # MSE for continuous action, CE for discrete action
-            # loss_fn=lambda s_hat, a_hat, r_hat, s, a, r: F.binary_cross_entropy(a_hat, a),
+            loss_fn=lambda s_hat, a_hat, r_hat, s, a, r: torch.mean((a_hat - a) ** 2),
             eval_fns=[eval_episodes(tar) for tar in env_targets],
         )
     elif model_type == "bc":
@@ -346,6 +412,7 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--log_to_wandb", "-w", type=bool, default=False)
     parser.add_argument("--save_eval_traj", "-s", type=bool, default=False)
+    parser.add_argument("--holdout_strategy", type=str, default="none")
 
     args = parser.parse_args()
     argsdict = args.__dict__
