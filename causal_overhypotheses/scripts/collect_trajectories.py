@@ -9,7 +9,43 @@ import tqdm
 import numpy as np
 import pickle
 
-hypotheses = {
+train_hypotheses = {
+    'disjunctive_train': [
+                        Adisj,
+                        Bdisj,
+                        Cdisj,
+                    ],
+    'conjunctive_train': [
+                        ABconj,
+                        ACconj,
+                        BCconj,
+                    ],
+    'disjunctive_loo': [
+                        Adisj,
+                        Bdisj,
+                    ],
+    'conjunctive_loo': [
+                        ABconj,
+                        ACconj,
+                    ],
+    'both_loo': [
+                        ABconj,
+                        ACconj,
+                        Adisj,
+                        Bdisj,
+                    ],
+    'none': [
+                ABconj,
+                ACconj,
+                BCconj,
+                Adisj,
+                Bdisj,
+                Cdisj,
+            
+    ]
+}
+
+eval_hypotheses = {
     'disjunctive_train': [
                 ABconj,
                 ACconj,
@@ -23,7 +59,7 @@ hypotheses = {
     'disjunctive_loo': [
                 Cdisj,
             ],
-    'conjuntive_loo': [
+    'conjunctive_loo': [
                 BCconj,
             ],
     'both_loo': [
@@ -57,7 +93,8 @@ def main(args):
     env = CausalEnv_v0({
         "reward_structure":  args.reward_structure,
         "quiz_disabled_steps": args.quiz_disabled_steps,
-        "hypotheses": hypotheses[args.holdout_strategy]
+        "hypotheses": eval_hypotheses[args.holdout_strategy] if args.mode == 'eval' else train_hypotheses[args.holdout_strategy],
+        "max_baseline_steps": args.max_steps - 5,  # save 5 steps for quiz phase
     })
 
     # Roll out the environment for k trajectories
@@ -109,6 +146,7 @@ def main(args):
         save_name = "random_action"
         save_name += ('_qd=' + str(args.quiz_disabled_steps)) if args.quiz_disabled_steps > 0 else ''
         save_name += ('_rs=' + str(args.reward_structure))
+        save_name += ('_hs=' + args.holdout_strategy + "_" + args.mode)
         os.makedirs('/network/scratch/l/lindongy/causal_overhypotheses/model_output/{}'.format(save_name), exist_ok=True)
         output_path = "/network/scratch/l/lindongy/causal_overhypotheses/model_output/{}/trajectories.pkl".format(save_name)
     else:
@@ -125,6 +163,7 @@ if __name__ == '__main__':
     parser.add_argument('--quiz_disabled_steps', type=int, default=-1, help='Number of steps to disable quiz')
     parser.add_argument('--reward_structure', type=str, default='baseline', help='Reward structure')
     parser.add_argument('--holdout_strategy', type=str, default='none', help='Holdout strategy')
+    parser.add_argument('--mode', type=str, default='eval', help='Environment to collect trajectory from (train or eval)')
     args = parser.parse_args()
     argsdict = args.__dict__
     print(argsdict)
