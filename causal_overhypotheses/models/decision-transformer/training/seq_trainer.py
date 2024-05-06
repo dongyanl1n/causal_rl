@@ -32,5 +32,4 @@ class SequenceTrainer(Trainer):
 
         with torch.no_grad():
             self.diagnostics['training/action_error'] = torch.mean((action_preds-action_target)**2).detach().cpu().item()
-            # self.diagnostics['training/action_error'] = F.binary_cross_entropy(action_preds, action_target).detach().cpu().item()
         return loss.detach().cpu().item()
