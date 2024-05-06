@@ -28,7 +28,7 @@ if __name__ == "__main__":
     trajectories = load_trajectories(args.file_path)
 
     if "trajectories.pkl" in args.file_path or "v2.pkl" in args.file_path:  # collected from RL agent or random policy
-
+        print(f"Total number of trajectories collected: {len(trajectories)}")
         # analyze components
         all_gts = [traj['gt'] for traj in trajectories]  # each element: str
         all_observations = [traj['observations'] for traj in trajectories]  # each element: epi_length x obs_dim
@@ -79,7 +79,8 @@ if __name__ == "__main__":
         #     df.to_csv(filename, index_label='Index')
     
     elif "iteration" in args.file_path:  # collected from decision transformer
-        # analyze components. length of each list is equal to the num_eval_traj inmodels/decision-transformer/experiment.py
+        # analyze components. length of each list is equal to the num_eval_traj in models/decision-transformer/experiment.py
+        print(f"Total number of trajectories collected: {len(trajectories)}")
         all_gts = [traj['gt'] for traj in trajectories]
         all_observations = [traj['observations'].cpu().numpy() for traj in trajectories]
         all_actions = [traj['actions'].cpu().numpy() for traj in trajectories]
@@ -94,7 +95,8 @@ if __name__ == "__main__":
         # Separate returns by gts
         for gt in set(all_gts):
             returns_for_gt = np.array([traj['returns'] for traj in trajectories if traj['gt'] == gt])
-            print(f"GT: {gt}, mean return: {np.mean(returns_for_gt)}")
+            print(f"GT: {gt}")
+            print(f"Mean return: {np.mean(returns_for_gt)}")
             actions_for_gt = [traj['actions'].cpu().numpy() for traj in trajectories if traj['gt'] == gt]
 
             # Check if all actions are the same across trajectories for each gt
@@ -102,12 +104,17 @@ if __name__ == "__main__":
             print(f"Actions consistent across trajectories for GT {gt}: {actions_consistent}")
             # if all actions are the same, print what action it is
             if actions_consistent:
-                print(f"Actions: {actions_for_gt[0]}")
+                print(f"Actions: ")
+                print(f"{actions_for_gt[0]}")
 
             num_exploration_steps = []
             for act in actions_for_gt:  # Assuming each act is a array of shape [epi_length, action_dim]
                 # count where the first 1 appears in the last dimension of action
-                idx_first_1 = np.where(act[:, -1] == 1)[0][0]
+                indices = np.where(act[:, -1] == 1)[0]
+                if indices.size > 0:  # If there are indices where the value is 1
+                    idx_first_1 = indices[0]
+                else:  # If there is no 1 in the array
+                    idx_first_1 = len(act)  # Use the length of the episode
                 num_exploration_steps.append(idx_first_1)
             mean_exploration_steps = np.mean(num_exploration_steps)
             print(f"Mean number of exploration steps: {mean_exploration_steps}")
