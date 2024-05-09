@@ -1,18 +1,42 @@
-import gym
-from envs.causal_env_v0 import CausalEnv_v1, ABconj, ACconj, BCconj, Adisj, Bdisj, Cdisj, ABCdisj
+import numpy as np
+import torch
+import argparse
+
+# parse args: seed, hypothesis, random_action
+parser = argparse.ArgumentParser()
+parser.add_argument('--seed', type=int, default=42)
+parser.add_argument('--hypothesis', type=str, default='ABCconj')
+parser.add_argument('--random_action', type=bool, default=False)  # TODO: fix this
+args = parser.parse_args()
+seed = args.seed
+hypothesis = args.hypothesis
+random_action = args.random_action
+print(seed, hypothesis, random_action)
+
+# Set seed for reproducibility
+np.random.seed(seed)  # Set seed for numpy
+torch.manual_seed(seed)  # Set seed for torch
+torch.cuda.manual_seed(seed)  # Set seed for current CUDA device
+
+# If you are using CUDA with PyTorch and want to make it deterministic:
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
+use_cuda = True
+if torch.cuda.is_available() and use_cuda:
+    device = torch.device('cuda')
+else:
+    device = torch.device('cpu')
+
+from envs.causal_env_v0 import CausalEnv_v1, ABconj, ACconj, BCconj, Adisj, Bdisj, Cdisj, ABCdisj, ABCconj, ABdisj, ACdisj, BCdisj
 from models.replay_buffer import ReplayBuffer
+from models.core import Core
 import pandas as pd
 from pgmpy.estimators import MmhcEstimator
 from collections import defaultdict
 from collections import deque
 from tqdm import tqdm
-
-
-# Create the environment
-env = CausalEnv_v1({"reward_structure": "baseline", 
-                    "quiz_disabled_steps": -1,
-                    "hypotheses": [ABCdisj],  # single hypothesis
-                    "max_baseline_steps": 100})
+import torch
 
 
 def visualize_graph(model):
@@ -31,15 +55,25 @@ def visualize_graph(model):
     plt.show()
 
 
+
+def one_hot_action_to_tuple(action, n_blickets):
+    # here, action is a flattened vector of dimension n_blickets*2
+    return (action % n_blickets, action // n_blickets)
+
+
 # Define the RL agent
 class Agent:
-    def __init__(self, env, buffer_capacity=1000, batch_size=10, convergence_threshold=5):
+    def __init__(self, env, buffer_capacity=1000, batch_size=10, convergence_threshold=5, hidden_size=128, device=device, random_action=False):
         self.env = env
         self.replay_buffer = ReplayBuffer(capacity=buffer_capacity)
         self.batch_size = batch_size
         self.state_visit_counts = defaultdict(lambda: defaultdict(int))
         self.previous_graphs = deque(maxlen=convergence_threshold)
         self.convergence_threshold = convergence_threshold
+        self.core = Core(env.observation_space.shape[0], env._n_blickets*2, hidden_size, device)
+        self.hidden_size = hidden_size
+        self.device = device
+        self.random_action = random_action
 
     def infer_causal_graph(self):
         data = [entry[0] for entry in self.replay_buffer.get_all_data()]  # Assume states are stored in the first index
@@ -49,14 +83,19 @@ class Agent:
         model = mmhc.estimate()
         return model
 
-    def select_action(self, state):
-        action = self.env.action_space.sample()  # Random action; replace with your policy
-        self.state_visit_counts[tuple(state)][action] += 1
-        return action
+    def select_action(self, state, random_action=False):
+        if random_action:
+            action = self.env.action_space.sample()
+            self.state_visit_counts[tuple(state)][action] += 1
+            return action
+        else:
+            action, value, log_prob = self.core.select_action(state)
+            self.state_visit_counts[tuple(state)][action] += 1
+            return action, value, log_prob
 
-    def compute_intrinsic_reward(self, state, action):
+    def compute_intrinsic_reward(self, state, action, epsilon=0.001):
         visit_count = self.state_visit_counts[tuple(state)][action]
-        intrinsic_reward = 1 / (visit_count + 1)  # Simple count-based intrinsic reward
+        intrinsic_reward = (self.env._steps / (visit_count + self.env._steps * epsilon))**0.5  # Simple count-based intrinsic reward
         return intrinsic_reward
 
     def has_converged(self):
@@ -65,16 +104,36 @@ class Agent:
         return all(g == self.previous_graphs[0] for g in self.previous_graphs)
 
     def train(self, episodes):
+        losses = []
         for episode in tqdm(range(episodes)):
             state = self.env.reset()
+            self.core.reset_hidden()
             done = False
+            rewards, log_probs, values, dones = [], [], [], []
             while not done:
-                action = self.select_action(state)
-                next_state, reward, done, _ = self.env.step(action)
-                intrinsic_reward = self.compute_intrinsic_reward(state, action)
-                total_reward = reward + intrinsic_reward
-                self.replay_buffer.push(state, action, total_reward, next_state, done)
-                state = next_state
+                if self.random_action:
+                    action = self.select_action(state, random_action=self.random_action)
+                    next_state, reward, done, _ = self.env.step(action)
+                    intrinsic_reward = self.compute_intrinsic_reward(state, action)
+                    total_reward = reward + intrinsic_reward
+                    self.replay_buffer.push(state, action, total_reward, next_state, done)
+                    state = next_state
+                else:
+                    action, value, log_prob = self.select_action(state)
+                    env_action = one_hot_action_to_tuple(action, self.env._n_blickets)
+                    next_state, reward, done, _ = self.env.step(env_action)
+                    intrinsic_reward = self.compute_intrinsic_reward(state, action)
+                    total_reward = reward + 0.001 * intrinsic_reward
+                    self.replay_buffer.push(state, action, total_reward, next_state, done)
+                    rewards.append(total_reward)
+                    log_probs.append(log_prob)
+                    values.append(value)
+                    dones.append(done)
+                    state = next_state
+
+            if not self.random_action:
+                loss = self.core.learn(log_probs, values, rewards, dones)
+                losses.append(loss)
 
             # Periodically infer the causal graph
             if episode % 10 == 0:
@@ -86,10 +145,48 @@ class Agent:
                     if self.has_converged():
                         print(f"Model has converged after {episode} episodes.")
                         break
-            # Perform any necessary logging or evaluation here
+                if not self.random_action:
+                    # report running average loss
+                    print(f"Episode {episode}. Running average loss: {sum(losses[-10:]) / 10}")
 
-agent = Agent(env)
-agent.train(episodes=500)
+
+def parse_hypothesis(hypothesis):
+    if hypothesis == 'ABCconj':
+        return ABCconj
+    elif hypothesis == 'ABconj':
+        return ABconj
+    elif hypothesis == 'ACconj':
+        return ACconj
+    elif hypothesis == 'BCconj':
+        return BCconj
+    elif hypothesis == 'Adisj':
+        return Adisj
+    elif hypothesis == 'Bdisj':
+        return Bdisj
+    elif hypothesis == 'Cdisj':
+        return Cdisj
+    elif hypothesis == 'ABCdisj':
+        return ABCdisj
+    elif hypothesis == 'ABdisj':
+        return ABdisj
+    elif hypothesis == 'ACdisj':
+        return ACdisj
+    elif hypothesis == 'BCdisj':
+        return BCdisj
+    else:
+        raise ValueError("Invalid hypothesis")
+
+if __name__ == '__main__':
+    # Create the environment
+    hypothesis = parse_hypothesis(hypothesis)
+    env = CausalEnv_v1({"reward_structure": "baseline", 
+                        "quiz_disabled_steps": -1,
+                        "hypotheses": [hypothesis],  # single hypothesis
+                        "max_baseline_steps": 100})
+
+    # Define the RL agent   
+    agent = Agent(env, random_action=random_action)
+    agent.train(episodes=5000)
 
                 
 # Close the environment
