@@ -33,6 +33,9 @@ from models.replay_buffer import ReplayBuffer
 from models.core import Core
 import pandas as pd
 from pgmpy.estimators import MmhcEstimator
+from pgmpy.models import BayesianNetwork
+from pgmpy.estimators import MaximumLikelihoodEstimator
+from pgmpy.inference import VariableElimination
 from collections import defaultdict
 from collections import deque
 from tqdm import tqdm
@@ -74,14 +77,19 @@ class Agent:
         self.hidden_size = hidden_size
         self.device = device
         self.random_action = random_action
+        self.model = None
 
     def infer_causal_graph(self):
-        data = [entry[0] for entry in self.replay_buffer.get_all_data()]  # Assume states are stored in the first index
-        if len(data) < 1:
+        data = pd.DataFrame([entry[0] for entry in self.replay_buffer.get_all_data()])  # Ensure data is in DataFrame
+        if data.empty:
             return None
-        mmhc = MmhcEstimator(pd.DataFrame(data))
-        model = mmhc.estimate()
-        return model
+        mmhc_estimator = MmhcEstimator(data)
+        structure = mmhc_estimator.estimate()
+        model = BayesianNetwork(structure.edges())
+        # Here we need to fit the CPDs using, for example, Maximum Likelihood Estimation
+        model.fit(data, estimator=MaximumLikelihoodEstimator)
+        self.model = model
+        return self.model
 
     def select_action(self, state, random_action=False):
         if random_action:
@@ -137,9 +145,9 @@ class Agent:
 
             # Periodically infer the causal graph
             if episode % 10 == 0:
-                model = self.infer_causal_graph()
-                if model:
-                    edges = frozenset(model.edges())
+                self.model = self.infer_causal_graph()
+                if self.model:
+                    edges = frozenset(self.model.edges())
                     self.previous_graphs.append(edges)
                     print("Learned model structure:", edges)
                     if self.has_converged():
@@ -147,7 +155,36 @@ class Agent:
                         break
                 if not self.random_action:
                     # report running average loss
-                    print(f"Episode {episode}. Running average loss: {sum(losses[-10:]) / 10}")
+                    print(f"Episode {episode}. Running average loss: {sum(losses[-10:]) / 10:.2f}")
+
+
+    def inference(self, query_vars, evidence):
+        """
+        Perform inference given evidence and return the probabilities for query variables.
+        
+        :param query_vars: List of variable indices for which to compute probabilities
+        :param evidence: Dictionary of observed variables and their values
+        :return: A dictionary of probability distributions for each query variable
+        """
+        assert self.model is not None, "Model has not been learned yet."
+        assert self.has_converged(), "Model has not converged yet."
+        assert isinstance(self.model, BayesianNetwork), "Stored model is not a BayesianModel."
+        assert self.model.check_model(), "The Bayesian model is not valid."
+        
+        inference_engine = VariableElimination(self.model)
+        results = {}
+        for var in query_vars:
+            if var not in self.model.nodes():
+                # print(f"Variable {var} is not in the model.")
+                results[var] = None
+                continue
+            table = inference_engine.query(variables=[var], evidence=evidence)
+            # print(f"Variable {var}: ")
+            # print(f"{table}")
+            # print(f"Variable {var} should take value {table.values.argmax()}")
+            results[var] = table.values.argmax()
+        return results
+
 
 
 def parse_hypothesis(hypothesis):
@@ -187,6 +224,11 @@ if __name__ == '__main__':
     # Define the RL agent   
     agent = Agent(env, random_action=random_action)
     agent.train(episodes=5000)
+    # Let's say you want to infer the state of variables 0, 1, 2 when variable 3 is True
+    evidence = {3: 1}  # Assuming binary states where 1 represents True
+    query_vars = [0, 1, 2]  # Variables you want to inquire about
+    inferred_probs = agent.inference(query_vars, evidence)
+    print(inferred_probs)
 
                 
 # Close the environment
