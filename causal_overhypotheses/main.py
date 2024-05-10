@@ -7,12 +7,16 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--seed', type=int, default=42)
 parser.add_argument('--hypothesis', type=str, default='ABCconj')
 parser.add_argument('--random_action', type=bool, default=False)  # pass True to use random actions, don't pass anything to use RL actions
+parser.add_argument('--exploration_scale', type=float, default=0.01)
+parser.add_argument('--template_matching_scale', type=float, default=0.02)
 args = parser.parse_args()
 seed = args.seed
 hypothesis = args.hypothesis
 random_action = args.random_action
+exploration_scale = args.exploration_scale
+template_matching_scale = args.template_matching_scale
 print(seed, hypothesis, random_action)
-
+print(f"Exploration scale: {exploration_scale}, Template matching scale: {template_matching_scale}")
 # Set seed for reproducibility
 np.random.seed(seed)  # Set seed for numpy
 torch.manual_seed(seed)  # Set seed for torch
@@ -333,6 +337,6 @@ if __name__ == '__main__':
                   action_size=explore_env._n_blickets*2, 
                   hidden_size=128, 
                   device=device)
-    agent.explore(explore_env, episodes=5000, scale=0.001, inference_interval=10)
+    agent.explore(explore_env, episodes=5000, scale=exploration_scale, inference_interval=10)
     agent.inference(query_vars, evidence)
-    agent.template_matching(quiz_env, episodes=1000, scale=0.02, evaluation_interval=100, evaluation_episodes=10)
+    agent.template_matching(quiz_env, episodes=1000, scale=template_matching_scale, evaluation_interval=50, evaluation_episodes=10)
