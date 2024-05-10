@@ -396,6 +396,7 @@ class CausalEnv_v1(gym.Env):
     def __init__(self, env_config: Dict[str, Any]) -> None:
         """
         Representation of the Blicket environment, based on the exeperiments presente in the causal learning paper.
+        Compared to v0, here the action space is changed to be intervention. Reward structure for quiz setting is also changed.
 
         Args:
             env_config (Dict[str, Any]): A dictionary representing the environment configuration.
@@ -423,11 +424,11 @@ class CausalEnv_v1(gym.Env):
         self._detector_reward = env_config.get("detector_reward", 0)  # No detector reward in this version
         self._quiz_positive_reward = env_config.get("quiz_positive_reward", 1)
         self._quiz_negative_reward = env_config.get("quiz_negative_reward", -1)
-        self._max_baseline_steps = env_config.get("max_baseline_steps", 100)  # max number of steps agent can take to explore, before forced to enter quiz stage
+        self._max_steps = env_config.get("max_steps", 100)  # max number of steps agent can take to explore, before forced to enter quiz stage
         self._blicket_dim = env_config.get("blicket_dim", 3)
         self._quiz_disabled_steps = env_config.get("quiz_disabled_steps", -1)
 
-        assert self._max_baseline_steps >= self._quiz_disabled_steps, "Max baseline steps must be greater than quiz-disabled steps."
+        assert self._max_steps >= self._quiz_disabled_steps, "Max baseline steps must be greater than quiz-disabled steps."
 
         # Gym environment setup
         self.action_space = spaces.Tuple((
@@ -437,7 +438,9 @@ class CausalEnv_v1(gym.Env):
 
         if self._symbolic:
             if 'quiz' in self._reward_structure:
-                pass
+                self.observation_space = spaces.Box(
+                    low=0, high=1, shape=(self._n_blickets + 1,), dtype=np.float32
+                )
             else:
                 self.observation_space = spaces.Box(
                     low=0, high=1, shape=(self._n_blickets + 1,), dtype=np.float32
@@ -496,7 +499,17 @@ class CausalEnv_v1(gym.Env):
             pass  # assume symbolic for now
 
     def _get_quiz_observation(self, blickets: np.ndarray) -> np.ndarray:
-        pass # assume baseline for now
+        if self._symbolic:
+            return np.concatenate(
+                [
+                    blickets,
+                    np.array([1]) if self._get_detector_state(blickets) else np.array([0]),
+                ],
+                axis=0,
+            )
+        else:
+            pass  # assume symbolic for now
+
 
     def _get_observation(self, blickets: np.ndarray) -> np.ndarray:
         if self._reward_structure == "baseline":
@@ -527,10 +540,24 @@ class CausalEnv_v1(gym.Env):
                 reward -= self._step_reward_penalty
             if self._get_detector_state(self.blickets):
                 reward += self._detector_reward
-            done = self._steps > self._max_baseline_steps
+            done = self._steps > self._max_steps
 
         elif 'quiz' in self._reward_structure:
-            pass
+            # note that action is now intervention
+            self.blickets[action[0]] = action[-1]
+            observation = self._get_baseline_observation(self.blickets)
+
+            if self._add_step_reward_penalty:
+                reward -= self._step_reward_penalty
+            if self._get_detector_state(self.blickets):
+                reward += self._detector_reward
+
+            # Give quiz reward
+            if set(np.where(self.blickets == 1)[0]) == self._current_gt_hypothesis.blickets:
+                reward += self._quiz_positive_reward
+                done = True
+            else:
+                done = self._steps > self._max_steps
 
         assert observation is not None
 
@@ -541,15 +568,17 @@ class CausalEnv_v1(gym.Env):
 def test_env():
     args = {
         'num_trajectories': 10,
-        'max_baseline_steps': 20,
+        'max_steps': 20,
         'quiz_disabled_steps': -1,
-        'reward_structure': 'baseline'
+        'reward_structure': 'quiz',
+        'add_step_reward_penalty': True
     }
 
     env = CausalEnv_v1({
         "reward_structure":  args['reward_structure'],
         "quiz_disabled_steps": args['quiz_disabled_steps'],
-        "max_baseline_steps": args["max_baseline_steps"]
+        "max_steps": args["max_steps"],
+        "add_step_reward_penalty": args["add_step_reward_penalty"]
     })
 
     # Roll out the environment for k trajectories
@@ -564,7 +593,7 @@ def test_env():
 
         # Roll out the environment for n steps
         steps = []
-        for j in range(args['max_baseline_steps']):
+        for j in range(args['max_steps']):
             print(f"-- step {j+1} --")
             # Get the action from the model
             action = env.action_space.sample()
