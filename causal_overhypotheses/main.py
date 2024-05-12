@@ -332,7 +332,8 @@ if __name__ == '__main__':
     query_vars = [0, 1, 2]  # Want to infer values of blickets A,B,C
 
     # Define the RL agent   
-    agent = Agent(random_action=random_action, 
+    agent = Agent(buffer_capacity=1000000,
+                  random_action=random_action, 
                   input_size=explore_env.observation_space.shape[0], 
                   action_size=explore_env._n_blickets*2, 
                   hidden_size=128, 
