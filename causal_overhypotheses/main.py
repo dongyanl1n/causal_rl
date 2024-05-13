@@ -1,21 +1,25 @@
 import numpy as np
 import torch
+import matplotlib.pyplot as plt
 import argparse
 
 # parse args: seed, hypothesis, random_action
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', type=int, default=42)
 parser.add_argument('--hypothesis', type=str, default='ABCconj')
-parser.add_argument('--random_action', type=bool, default=False)  # pass True to use random actions, don't pass anything to use RL actions
-parser.add_argument('--exploration_scale', type=float, default=0.01)
+parser.add_argument('--random_explore', type=bool, default=False)
+parser.add_argument('--random_exploit', type=bool, default=False)
+parser.add_argument('--exploration_scale', type=float, default=0.001)
 parser.add_argument('--template_matching_scale', type=float, default=0.02)
 args = parser.parse_args()
 seed = args.seed
 hypothesis = args.hypothesis
-random_action = args.random_action
+random_explore = args.random_explore
+random_exploit = args.random_exploit
 exploration_scale = args.exploration_scale
 template_matching_scale = args.template_matching_scale
-print(seed, hypothesis, random_action)
+print(seed, hypothesis)
+print(f"Random explore: {random_explore}, Random exploit: {random_exploit}")
 print(f"Exploration scale: {exploration_scale}, Template matching scale: {template_matching_scale}")
 # Set seed for reproducibility
 np.random.seed(seed)  # Set seed for numpy
@@ -88,7 +92,7 @@ def tuple_action_to_vector(action, n_blickets):
 # Define the RL agent
 class Agent:
     def __init__(self, input_size, action_size, buffer_capacity=1000,
-                convergence_threshold=5, hidden_size=128, device=device, random_action=False):
+                convergence_threshold=5, hidden_size=128, device=device):
         self.replay_buffer = ReplayBuffer(capacity=buffer_capacity)
         self.state_visit_counts = defaultdict(lambda: defaultdict(int))
         self.previous_graphs = deque(maxlen=convergence_threshold)
@@ -96,11 +100,11 @@ class Agent:
         self.core = Core(input_size, action_size, hidden_size, device)
         self.hidden_size = hidden_size
         self.device = device
-        self.random_action = random_action
         self.model = None
         self.template_actions = None
         self.total_episodes = 0
         self.phase = 'explore'  # start with explore
+        self.result_dict = {'explore': {}, 'exploit': {}}
 
     def select_action(self, env, state, random_action=False):
         if random_action:
@@ -130,7 +134,8 @@ class Agent:
             return False
         return all(g == self.previous_graphs[0] for g in self.previous_graphs)
 
-    def train(self, env, episodes, scale=0.001, inference_interval=10, evaluation_interval=10, evaluation_episodes=5, int_reward_function=None):
+    def train(self, env, episodes, scale, inference_interval=10, evaluation_interval=10, evaluation_episodes=5, 
+              int_reward_function=None, random_action=False):
         assert int_reward_function is not None, "No reward function provided."
         losses = []
         for episode in range(episodes):
@@ -139,11 +144,11 @@ class Agent:
             done = False
             rewards, log_probs, values, dones = [], [], [], []
             while not done:
-                if self.random_action:
-                    action = self.select_action(env, state, self.random_action)
+                if random_action:
+                    action = self.select_action(env, state, random_action)
                     next_state, reward, done, _ = env.step(action)
                 else:
-                    action, value, log_prob = self.select_action(env, state, self.random_action)
+                    action, value, log_prob = self.select_action(env, state, random_action)
                     env_action = integer_action_to_tuple(action, env._n_blickets)
                     next_state, reward, done, _ = env.step(env_action)
                     # convert action to one-hot vector if int_reward_function is calculate_match_score_to_template
@@ -159,17 +164,18 @@ class Agent:
                 self.replay_buffer.push(state, action, reward, next_state, done)
                 state = next_state
 
-            if not self.random_action:
+            if not random_action:
                 loss = self.core.learn(log_probs, values, rewards, dones, self.phase)
                 losses.append(loss)
 
             # Evaluate the performance periodically
             if episode % evaluation_interval == 0 and episode > 0:
                 self.total_episodes += evaluation_interval
-                print(f"Phase: {self.phase}, episode {episode}. Total episode {self.total_episodes}.")
-                self.evaluate_and_report(env, evaluation_episodes)
-                if not self.random_action:
-                    print(f"Episode {episode}. Running average loss: {sum(losses[-inference_interval:]) / 10:.2f}")
+                # print(f"Phase: {self.phase}, episode {episode}. Total episode {self.total_episodes}.")
+                average_reward = self.evaluate_and_report(env, evaluation_episodes, random_action=random_action)
+                self.result_dict[self.phase][episode] = average_reward
+                # if not random_action:
+                    # print(f"Episode {episode}. Running average loss: {sum(losses[-inference_interval:]) / 10:.2f}")
             
             if self.phase=="explore": 
                 # Periodically infer the causal graph
@@ -178,9 +184,9 @@ class Agent:
                     if self.model:
                         edges = frozenset(self.model.edges())
                         self.previous_graphs.append(edges)
-                        print("Learned model structure:", edges)
+                        # print("Learned model structure:", edges)
                         if self.has_converged():
-                            print(f"!!!Model has converged after {episode} episodes.")
+                            # print(f"!!!Model has converged after {episode} episodes.")
                             self.phase = 'exploit'
                             break
 
@@ -213,13 +219,13 @@ class Agent:
             self.template_actions.append(tuple_action_to_vector(tuple([var, table.values.argmax()]), n_blickets=3))
         return results, self.template_actions
     
-    def evaluate_and_report(self, env, episodes):
+    def evaluate_and_report(self, env, episodes, random_action):
         total_rewards = 0  # reward from environment
         for _ in range(episodes):
             state = env.reset()
             done = False
             while not done:
-                if self.random_action:
+                if random_action:
                     action = env.action_space.sample()
                     next_state, reward, done, _ = env.step(action)
                     total_rewards += reward
@@ -232,7 +238,8 @@ class Agent:
                     state = next_state
                     
         average_reward = total_rewards / episodes
-        print(f"Evaluation over {episodes} episodes: Avg Reward = {average_reward:.2f}")
+        # print(f"Evaluation over {episodes} episodes: Avg Reward = {average_reward:.2f}")
+        return average_reward
     
     def infer_causal_graph(self):
         data = pd.DataFrame([entry[0] for entry in self.replay_buffer.get_all_data()])  # Ensure data is in DataFrame
@@ -246,19 +253,25 @@ class Agent:
         self.model = model
         return self.model
 
-    def run_full_pipeline(self, env1, env2, query_vars, evidence, exploration_scale, template_matching_scale, exploration_episodes=1000, exploitation_episodes=1000):
+    def run_full_pipeline(self, env1, env2, query_vars, evidence, exploration_scale, template_matching_scale, 
+                          random_explore=False, random_exploit=False,
+                          exploration_episodes=1000, exploitation_episodes=1000):
         # Explore phase
         self.train(env1, exploration_episodes, scale=exploration_scale, evaluation_interval=10, evaluation_episodes=5,
-                   int_reward_function=self.compute_explore_intrinsic_reward)
+                   int_reward_function=self.compute_explore_intrinsic_reward, random_action=random_explore)
 
         # Infer template actions
         self.inference(query_vars=query_vars, evidence=evidence)
 
         # # Exploit phase
-        self.train(env2, exploitation_episodes, scale=template_matching_scale, evaluation_interval=10, evaluation_episodes=5,
-                   int_reward_function=self.calculate_match_score_to_template)
-        
+        self.train(env2, exploitation_episodes, scale=template_matching_scale, evaluation_interval=5, evaluation_episodes=5,
+                   int_reward_function=self.calculate_match_score_to_template, random_action=random_exploit)
 
+        print("Final model structure:")
+        print(self.model.edges())
+        print("Average reward results:")
+        print(self.result_dict['exploit'])
+        
 
 
 
@@ -303,13 +316,13 @@ if __name__ == '__main__':
     query_vars = [0, 1, 2]  # Want to infer values of blickets A,B,C
 
     # Define the RL agent   
-    agent = Agent(buffer_capacity=1000,
-                  random_action=random_action, 
+    agent = Agent(buffer_capacity=1000000,
                   input_size=explore_env.observation_space.shape[0], 
                   action_size=explore_env._n_blickets*2, 
                   hidden_size=128, 
                   device=device)
     agent.run_full_pipeline(env1=explore_env, env2=quiz_env, query_vars=query_vars, evidence=evidence, 
+                            random_explore=random_explore, random_exploit=random_exploit,
         exploration_scale=exploration_scale,
         template_matching_scale=template_matching_scale,
-        exploration_episodes=1000, exploitation_episodes=1000)
+        exploration_episodes=5000, exploitation_episodes=500)
