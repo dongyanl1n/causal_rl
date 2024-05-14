@@ -48,7 +48,6 @@ class ActorCriticRNN(nn.Module):
                 torch.zeros(1, self.hidden_size, device=self.device))
 
 
-
 class Core:
     def __init__(self, state_size, action_size, hidden_size, device=device):
         self.device = device
@@ -73,7 +72,7 @@ class Core:
         log_prob = torch.log(policy.squeeze(0)[action])
         return action, value, log_prob
 
-    def learn(self, log_probs, values, rewards, dones, phase):
+    def learn(self, log_probs, values, rewards, dones, phase, retain_graph=False):
         # Select optimizer based on phase
         optimizer = self.exploration_optimizer if phase == 'explore' else self.exploitation_optimizer
         
@@ -83,7 +82,7 @@ class Core:
         policy_loss = self.compute_policy_loss(log_probs, returns)
         value_loss = self.compute_value_loss(values, returns)
         loss = policy_loss + value_loss
-        loss.backward()
+        loss.backward(retain_graph=retain_graph)
         optimizer.step()
         return loss.item()
 
