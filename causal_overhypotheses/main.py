@@ -39,6 +39,7 @@ else:
 from envs.causal_env_v0 import CausalEnv_v1, ABconj, ACconj, BCconj, Adisj, Bdisj, Cdisj, ABCdisj, ABCconj, ABdisj, ACdisj, BCdisj
 from models.replay_buffer import ReplayBuffer
 from models.core import Core
+from models.baseline_core import BaselineCore
 import pandas as pd
 from pgmpy.estimators import MmhcEstimator
 from pgmpy.models import BayesianNetwork
@@ -383,7 +384,79 @@ class MultiEnvAgent:
     #     return all_rewards
 
 
+class MultiEnvBaselineAgent:
+    def __init__(self, input_size, action_size, buffer_capacity=1000, hidden_size=128, device=device):
+        self.replay_buffer = ReplayBuffer(capacity=buffer_capacity)
+        self.input_size = input_size
+        self.action_size = action_size
+        self.hidden_size = hidden_size
+        self.device = device
+        self.core = BaselineCore(self.input_size, self.action_size, self.hidden_size, self.device)
+        self.total_episode_counter = 0
+        self.episodes_since_last_env = 0
+        self.env = None
+        self.hypothesis_list = ['Adisj', 'Bdisj', 'Cdisj', 'ABCdisj', 'ABdisj', 'ACdisj', 'BCdisj']
+
+    def reinit_for_env(self):
+        self.reinit_buffer()
+        self.core.reset_hidden()
+        self.episodes_since_last_env = 0
+
+    def reinit_buffer(self):
+        self.replay_buffer = ReplayBuffer(capacity=self.replay_buffer.capacity)
         
+
+    def train(self, total_episodes, episodes_per_env,
+               evaluation_interval=10, evaluation_episodes=5):
+        results = {}
+        gts = {}
+        while self.total_episode_counter < total_episodes:
+            if self.total_episode_counter % episodes_per_env == 0:  # Switch environment every episodes_per_env episodes
+                print(f"Episode {self.total_episode_counter} of {total_episodes}. ")
+                self.reinit_for_env()
+                self.env = generate_env(self.hypothesis_list, max_steps=5)
+                gts[self.total_episode_counter] = str(self.env._current_gt_hypothesis).split("'")[1].split('.')[-1]
+
+            self.episodes_since_last_env += 1
+            self.total_episode_counter += 1
+
+            state = self.env.reset()
+            done = False
+            rewards, log_probs, values, dones = [], [], [], []
+            while not done:
+                action, value, log_prob = self.core.select_action(state)
+                env_action = integer_action_to_tuple(action, self.env._n_blickets)
+                next_state, reward, done, _ = self.env.step(env_action)
+                rewards.append(reward)
+                log_probs.append(log_prob)
+                values.append(value)
+                dones.append(done)
+                state = next_state
+
+            loss = self.core.learn(log_probs, values, rewards, dones, retain_graph=True)  # calls loss.backward
+            if self.episodes_since_last_env % evaluation_interval == 0:
+                average_reward = self.evaluate_and_report(self.env, evaluation_episodes)
+                results[self.total_episode_counter] = average_reward
+        return results, gts
+    
+    def evaluate_and_report(self, env, episodes):
+        total_rewards = 0
+        for _ in range(episodes):
+            state = env.reset()
+            done = False
+            while not done:
+                action, _, _ = self.core.select_action(state)
+                env_action = integer_action_to_tuple(action, env._n_blickets)
+                next_state, reward, done, _ = env.step(env_action)
+                total_rewards += reward
+                state = next_state
+        average_reward = total_rewards / episodes
+        print(f"{self.episodes_since_last_env} episodes since last env. Avg Reward over {episodes} episodes = {average_reward:.2f}")
+        return average_reward
+
+
+
+
 def generate_env(hypothesis_list, max_steps):
 
     hypothesis = random.choice(hypothesis_list)
@@ -430,25 +503,33 @@ def parse_hypothesis(hypothesis):
 if __name__ == '__main__':
     total_n_epi = 10000
     episodes_per_env = 500
-    evidence = {3: 1}  # Want detector to be True
-    query_vars = [0, 1, 2]  # Want to infer values of blickets A,B,C
+    # evidence = {3: 1}  # Want detector to be True
+    # query_vars = [0, 1, 2]  # Want to infer values of blickets A,B,C
 
-    # Define the RL agent   
-    agent = MultiEnvAgent(buffer_capacity=1000000,
+    # # Define the RL agent   
+    # agent = MultiEnvAgent(buffer_capacity=1000000,
+    #               input_size=4, # n_blickets + 1
+    #               action_size=6, # n_blickets * 2
+    #               hidden_size=128, 
+    #               device=device)
+
+    # # training
+    # results, gts = agent.train(total_episodes=total_n_epi, episodes_per_env=episodes_per_env,
+    #             random_explore=random_explore, query_vars=query_vars, evidence=evidence, explore_scale=explore_scale,
+    #             template_matching_scale=template_matching_scale, inference_interval=5, evaluation_interval=50, evaluation_episodes=10)
+    
+    baseline_agent = MultiEnvBaselineAgent(buffer_capacity=1000000,
                   input_size=4, # n_blickets + 1
                   action_size=6, # n_blickets * 2
                   hidden_size=128, 
                   device=device)
-
-    # training
-    results, gts = agent.train(total_episodes=total_n_epi, episodes_per_env=episodes_per_env,
-                random_explore=random_explore, query_vars=query_vars, evidence=evidence, explore_scale=explore_scale,
-                template_matching_scale=template_matching_scale, inference_interval=5, evaluation_interval=50, evaluation_episodes=10)
+    results, gts = baseline_agent.train(total_episodes=total_n_epi, episodes_per_env=episodes_per_env,evaluation_interval=50, evaluation_episodes=10)
     print(results)
     print(gts)
     # plot results
     plt.plot(list(results.keys()), list(results.values()))
     plt.xlabel('Episodes')
     plt.ylabel('Average Reward')
-    exp = 'random' if random_explore else 'exp{}'.format(explore_scale)
-    plt.savefig(f'results_seed{seed}_tm{template_matching_scale}_{exp}.png')
+    # exp = 'random' if random_explore else 'exp{}'.format(explore_scale)
+    # plt.savefig(f'results_seed{seed}_tm{template_matching_scale}_{exp}.png')
+    plt.savefig(f'results_baseline.png')
