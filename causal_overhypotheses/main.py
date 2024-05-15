@@ -8,18 +8,40 @@ from tqdm import tqdm
 # parse args: seed, hypothesis, random_action
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', type=int, default=42)
-parser.add_argument('--explore_scale', type=float, default=0.001)
+parser.add_argument('--explore_scale', type=float, default=0.01)
 parser.add_argument('--template_matching_scale', type=float, default=0.02)
 parser.add_argument('--random_explore', type=bool, default=False)
+parser.add_argument('--n_blickets', type=int, default=3)
+parser.add_argument('--lr', type=float, default=0.01)
+parser.add_argument('--total_n_epi', type=int, default=10000)
+parser.add_argument('--episodes_per_env', type=int, default=500)
+parser.add_argument('--model', type=str, default='causalnet')
+
 args = parser.parse_args()
 seed = args.seed
 explore_scale = args.explore_scale
 template_matching_scale = args.template_matching_scale
 random_explore = args.random_explore
+n_blickets = args.n_blickets
+lr = args.lr
+total_n_epi = args.total_n_epi
+episodes_per_env = args.episodes_per_env
+model = args.model
+
 print(f"Seed: {seed}")
-print(f"Random explore: {random_explore}")
-print(f"Explore scale: {explore_scale}")
-print(f"Template matching scale: {template_matching_scale}")
+print(f"Number of blickets: {n_blickets}")
+print(f"Total number of episodes: {total_n_epi}")
+print(f"Episodes per environment: {episodes_per_env}")
+print(f"Model: {model}")
+print(f"Learning rate: {lr}")
+if model=='causalnet':
+    print(f"Random explore: {random_explore}")
+    if not random_explore:
+        print(f"Explore scale: {explore_scale}")
+    print(f"Template matching scale: {template_matching_scale}")
+elif model=='baseline':
+    print(f"Explore scale: {explore_scale}")
+
 # Set seed for reproducibility
 np.random.seed(seed)  # Set seed for numpy
 torch.manual_seed(seed)  # Set seed for torch
@@ -36,7 +58,7 @@ if torch.cuda.is_available() and use_cuda:
 else:
     device = torch.device('cpu')
 
-from envs.causal_env_v0 import CausalEnv_v1, ABconj, ACconj, BCconj, Adisj, Bdisj, Cdisj, ABCdisj, ABCconj, ABdisj, ACdisj, BCdisj
+from envs.causal_env_v0 import CausalEnv_v1, generate_hypothesis
 from models.replay_buffer import ReplayBuffer
 from models.core import Core
 from models.baseline_core import BaselineCore
@@ -92,24 +114,26 @@ def tuple_action_to_vector(action, n_blickets):
 
 # Define the RL agent
 class MultiEnvAgent:
-    def __init__(self, input_size, action_size, buffer_capacity=1000,
+    def __init__(self, n_blickets, hypothesis_list, buffer_capacity=1000, lr=0.01,
                 convergence_threshold=5, hidden_size=128, device=device):
         self.replay_buffer = ReplayBuffer(capacity=buffer_capacity)
         self.state_visit_counts = defaultdict(lambda: defaultdict(int))
         self.previous_graphs = deque(maxlen=convergence_threshold)
         self.convergence_threshold = convergence_threshold
-        self.input_size = input_size
-        self.action_size = action_size
+        self.n_blickets = n_blickets
+        self.input_size = self.n_blickets + 1  # n_blickets + 1 for the detector
+        self.action_size = self.n_blickets * 2  # n_blickets * 2 for the blickets
         self.hidden_size = hidden_size
         self.device = device
-        self.core = Core(self.input_size, self.action_size, self.hidden_size, self.device)
+        self.lr = lr
+        self.core = Core(self.input_size, self.action_size, self.hidden_size, self.lr, self.device)
         self.model = None # bayes net
         self.template_actions = None
         self.total_episode_counter = 0
         self.episodes_since_last_env = 0
         self.phase = 'explore'  # start with explore
         self.env = None
-        self.hypothesis_list = ['Adisj', 'Bdisj', 'Cdisj', 'ABCdisj', 'ABdisj', 'ACdisj', 'BCdisj']
+        self.hypothesis_list = hypothesis_list
         # self.test_hypothesis_list = ['ABCconj', 'ABconj', 'ACconj', 'BCconj']
 
     def reinit_for_env(self):
@@ -157,7 +181,7 @@ class MultiEnvAgent:
 
     
     def train(self, total_episodes, episodes_per_env, random_explore, 
-              query_vars=[0, 1, 2], evidence={3:1}, 
+              query_vars, evidence, 
               explore_scale=None, template_matching_scale=0.02,
               inference_interval=1, evaluation_interval=10, evaluation_episodes=5):
         results = {}
@@ -168,8 +192,8 @@ class MultiEnvAgent:
             if self.total_episode_counter % episodes_per_env == 0:  # Switch environment every episodes_per_env episodes
                 print(f"Episode {self.total_episode_counter} of {total_episodes}. ")
                 self.reinit_for_env()
-                self.env = generate_env(self.hypothesis_list, max_steps=5)
-                gts[self.total_episode_counter] = str(self.env._current_gt_hypothesis).split("'")[1].split('.')[-1]
+                self.env = generate_env(n_blickets=self.n_blickets, hypothesis_list=self.hypothesis_list, max_steps=self.n_blickets+2)
+                gts[self.total_episode_counter] = self.env._current_gt_hypothesis.name
 
             self.episodes_since_last_env += 1
             self.total_episode_counter += 1
@@ -187,7 +211,7 @@ class MultiEnvAgent:
                         next_state, reward, done, _ = self.env.step(action)
                     else:
                         action, value, log_prob = self.select_action(self.env, state, random_explore)
-                        env_action = integer_action_to_tuple(action, self.env._n_blickets)
+                        env_action = integer_action_to_tuple(action, self.n_blickets)
                         next_state, reward, done, _ = self.env.step(env_action)
                         intrinsic_reward = self.compute_explore_intrinsic_reward(env=self.env, state=state, action=action)
                         total_reward = reward + explore_scale * intrinsic_reward
@@ -225,9 +249,9 @@ class MultiEnvAgent:
                     rewards, log_probs, values, dones = [], [], [], []
                     while not done:
                         action, value, log_prob = self.select_action(self.env, state)
-                        env_action = integer_action_to_tuple(action, self.env._n_blickets)
+                        env_action = integer_action_to_tuple(action, self.n_blickets)
                         next_state, reward, done, _ = self.env.step(env_action)
-                        intrinsic_reward = self.calculate_match_score_to_template(torch.eye(self.env._n_blickets*2)[action])
+                        intrinsic_reward = self.calculate_match_score_to_template(torch.eye(self.n_blickets*2)[action])
                         total_reward = reward + template_matching_scale * intrinsic_reward
                         rewards.append(total_reward)
                         log_probs.append(log_prob)
@@ -274,7 +298,8 @@ class MultiEnvAgent:
             # print(f"{table}")
             # print(f"Variable {var} should take value {table.values.argmax()}")
             results[var] = table.values.argmax()
-            self.template_actions.append(tuple_action_to_vector(tuple([var, table.values.argmax()]), n_blickets=3))
+            self.template_actions.append(tuple_action_to_vector(tuple([var, table.values.argmax()]), n_blickets=self.n_blickets))
+            print(f"Template action for variable {var}: {tuple([var, table.values.argmax()])}")
         return results, self.template_actions
     
     def evaluate_and_report(self, env, episodes, random_action):
@@ -290,7 +315,7 @@ class MultiEnvAgent:
                     state = next_state
                 else:
                     action, _, _ = self.core.select_action(state, phase=self.phase)  # exploit but don't count visitations
-                    env_action = integer_action_to_tuple(action, env._n_blickets)
+                    env_action = integer_action_to_tuple(action, self.n_blickets)
                     next_state, reward, done, _ = env.step(env_action)
                     total_rewards += reward
                     state = next_state
@@ -313,7 +338,7 @@ class MultiEnvAgent:
     
 
     # def eval_on_unseen_env(self, episodes_per_env, random_explore, query_vars, evidence, explore_scale, template_matching_scale, inference_interval, evaluation_interval, evaluation_episodes):
-    #     env = generate_env(self.test_hypothesis_list, max_steps=5)
+    #     env = generate_env(n_blickets=3, hypothesis_list=self.test_hypothesis_list, max_steps=5)
     #     self.reinit_graphs()
     #     self.reinit_buffer()
     #     self.phase = 'explore'  # Start in explore phase
@@ -385,28 +410,34 @@ class MultiEnvAgent:
 
 
 class MultiEnvBaselineAgent:
-    def __init__(self, input_size, action_size, buffer_capacity=1000, hidden_size=128, device=device):
-        self.replay_buffer = ReplayBuffer(capacity=buffer_capacity)
-        self.input_size = input_size
-        self.action_size = action_size
+    def __init__(self, n_blickets, hypothesis_list, hidden_size=128, lr=0.01, device=device):
+        self.state_visit_counts = defaultdict(lambda: defaultdict(int))
+        self.n_blickets = n_blickets
+        self.input_size = self.n_blickets + 1  # n_blickets + 1 for the detector
+        self.action_size = self.n_blickets * 2  # n_blickets * 2 for the blickets
         self.hidden_size = hidden_size
         self.device = device
-        self.core = BaselineCore(self.input_size, self.action_size, self.hidden_size, self.device)
+        self.lr = lr
+        self.core = BaselineCore(self.input_size, self.action_size, self.hidden_size, self.lr, self.device)
         self.total_episode_counter = 0
         self.episodes_since_last_env = 0
         self.env = None
-        self.hypothesis_list = ['Adisj', 'Bdisj', 'Cdisj', 'ABCdisj', 'ABdisj', 'ACdisj', 'BCdisj']
+        self.hypothesis_list = hypothesis_list
 
     def reinit_for_env(self):
-        self.reinit_buffer()
+        self.reinit_count()
         self.core.reset_hidden()
         self.episodes_since_last_env = 0
 
-    def reinit_buffer(self):
-        self.replay_buffer = ReplayBuffer(capacity=self.replay_buffer.capacity)
-        
+    def reinit_count(self):
+        self.state_visit_counts = defaultdict(lambda: defaultdict(int))
+    
+    def compute_explore_intrinsic_reward(self, env, state, action, epsilon=0.001):
+        visit_count = self.state_visit_counts[tuple(state)][action]
+        intrinsic_reward = (env._steps / (visit_count + env._steps * epsilon))**0.5  # Zhang et al. (2018)
+        return intrinsic_reward
 
-    def train(self, total_episodes, episodes_per_env,
+    def train(self, total_episodes, episodes_per_env, explore_scale=0,
                evaluation_interval=10, evaluation_episodes=5):
         results = {}
         gts = {}
@@ -414,8 +445,8 @@ class MultiEnvBaselineAgent:
             if self.total_episode_counter % episodes_per_env == 0:  # Switch environment every episodes_per_env episodes
                 print(f"Episode {self.total_episode_counter} of {total_episodes}. ")
                 self.reinit_for_env()
-                self.env = generate_env(self.hypothesis_list, max_steps=5)
-                gts[self.total_episode_counter] = str(self.env._current_gt_hypothesis).split("'")[1].split('.')[-1]
+                self.env = generate_env(n_blickets=self.n_blickets, hypothesis_list=self.hypothesis_list, max_steps=self.n_blickets+2)
+                gts[self.total_episode_counter] = self.env._current_gt_hypothesis.name
 
             self.episodes_since_last_env += 1
             self.total_episode_counter += 1
@@ -425,9 +456,12 @@ class MultiEnvBaselineAgent:
             rewards, log_probs, values, dones = [], [], [], []
             while not done:
                 action, value, log_prob = self.core.select_action(state)
-                env_action = integer_action_to_tuple(action, self.env._n_blickets)
+                self.state_visit_counts[tuple(state)][action] += 1
+                env_action = integer_action_to_tuple(action, self.n_blickets)
                 next_state, reward, done, _ = self.env.step(env_action)
-                rewards.append(reward)
+                intrinsic_reward = self.compute_explore_intrinsic_reward(env=self.env, state=state, action=action)
+                total_reward = reward + explore_scale * intrinsic_reward
+                rewards.append(total_reward)
                 log_probs.append(log_prob)
                 values.append(value)
                 dones.append(done)
@@ -446,7 +480,7 @@ class MultiEnvBaselineAgent:
             done = False
             while not done:
                 action, _, _ = self.core.select_action(state)
-                env_action = integer_action_to_tuple(action, env._n_blickets)
+                env_action = integer_action_to_tuple(action, self.n_blickets)
                 next_state, reward, done, _ = env.step(env_action)
                 total_rewards += reward
                 state = next_state
@@ -457,16 +491,20 @@ class MultiEnvBaselineAgent:
 
 
 
-def generate_env(hypothesis_list, max_steps):
-
+def generate_env(n_blickets, hypothesis_list, max_steps):
+    # hypothesis_list gives a list of possible hypotheses
+    # assume one hypothesis per environment
+    """
+    Randomly selects a hypothesis from the hypothesis_list and generates an environment based on that hypothesis.
+    """
     hypothesis = random.choice(hypothesis_list)
     print(f"New environment with hypothesis: {hypothesis}")
-    if type(hypothesis) == str:
-        hypothesis = parse_hypothesis(hypothesis)
+    assert type(hypothesis) == str, "hypothesis_list should be a list of strings"
 
     # Create environments based on the phase: exploration or exploitation
     env = CausalEnv_v1({
-        "hypotheses": [hypothesis],  # single hypothesis
+        "n_blickets": n_blickets,
+        "hypotheses": [generate_hypothesis(hypothesis)],  # single hypothesis
         "max_steps": max_steps,
         'add_quiz_positive_reward': True})
 
@@ -474,62 +512,70 @@ def generate_env(hypothesis_list, max_steps):
 
 
 
-def parse_hypothesis(hypothesis):
-    if hypothesis == 'ABCconj':
-        return ABCconj
-    elif hypothesis == 'ABconj':
-        return ABconj
-    elif hypothesis == 'ACconj':
-        return ACconj
-    elif hypothesis == 'BCconj':
-        return BCconj
-    elif hypothesis == 'Adisj':
-        return Adisj
-    elif hypothesis == 'Bdisj':
-        return Bdisj
-    elif hypothesis == 'Cdisj':
-        return Cdisj
-    elif hypothesis == 'ABCdisj':
-        return ABCdisj
-    elif hypothesis == 'ABdisj':
-        return ABdisj
-    elif hypothesis == 'ACdisj':
-        return ACdisj
-    elif hypothesis == 'BCdisj':
-        return BCdisj
-    else:
-        raise ValueError("Invalid hypothesis")
+def plot_results(results, title):
+    # Function to compute exponential moving average
+    def exponential_moving_average(data, span):
+        ema = pd.Series(data).ewm(span=span, adjust=False).mean().to_numpy()
+        return ema
+
+    episodes = list(results.keys())
+    average_rewards = list(results.values())
+
+    # Compute smoothed average rewards using EMA
+    span = 50  # You can adjust the span for smoothing
+    smoothed_rewards_ema = exponential_moving_average(average_rewards, span)
+
+    # Plotting the results
+    plt.figure(figsize=(10, 6))
+    plt.plot(episodes, average_rewards, marker='o', linestyle='-', label='Average Rewards')
+    plt.plot(episodes, smoothed_rewards_ema, marker='', linestyle='-', label='Smoothed Average Rewards (EMA)', color='red')
+    plt.xlabel('Episodes')
+    plt.ylabel('Average Rewards')
+    plt.title(f'{title}')
+    plt.grid(True)
+    plt.savefig(f'{title}.png')
+    plt.close()
+
 
 if __name__ == '__main__':
-    total_n_epi = 10000
-    episodes_per_env = 500
-    # evidence = {3: 1}  # Want detector to be True
-    # query_vars = [0, 1, 2]  # Want to infer values of blickets A,B,C
-
-    # # Define the RL agent   
-    # agent = MultiEnvAgent(buffer_capacity=1000000,
-    #               input_size=4, # n_blickets + 1
-    #               action_size=6, # n_blickets * 2
-    #               hidden_size=128, 
-    #               device=device)
-
-    # # training
-    # results, gts = agent.train(total_episodes=total_n_epi, episodes_per_env=episodes_per_env,
-    #             random_explore=random_explore, query_vars=query_vars, evidence=evidence, explore_scale=explore_scale,
-    #             template_matching_scale=template_matching_scale, inference_interval=5, evaluation_interval=50, evaluation_episodes=10)
     
-    baseline_agent = MultiEnvBaselineAgent(buffer_capacity=1000000,
-                  input_size=4, # n_blickets + 1
-                  action_size=6, # n_blickets * 2
+    hypothesis_list = ['Adisj', 'Bdisj', 'Cdisj', 'Ddisj', 
+                       'ABdisj', 'ACdisj', 'ADdisj','ABconj', 'ACconj', 'ADconj',
+                       'BCdisj', 'BDdisj','BCconj', 'BDconj',
+                       'CDdisj','CDconj',
+                       'ABCdisj', 'ABDdisj', 'ABCconj', 'ABDconj', 
+                       'ACDdisj','ACDconj',
+                       'BCDdisj','BCDconj',
+                       'ABCDdisj', 'ABCDconj']
+    if model=='baseline':
+        baseline_agent = MultiEnvBaselineAgent(hypothesis_list=hypothesis_list,
+                                               lr=lr,
+                    n_blickets=n_blickets,
                   hidden_size=128, 
                   device=device)
-    results, gts = baseline_agent.train(total_episodes=total_n_epi, episodes_per_env=episodes_per_env,evaluation_interval=50, evaluation_episodes=10)
+        results, gts = baseline_agent.train(total_episodes=total_n_epi, episodes_per_env=episodes_per_env,explore_scale=explore_scale,evaluation_interval=50, evaluation_episodes=10)
+    elif model=='causalnet':
+        # evidence = {3: 1}  # Want detector to be True
+        # query_vars = [0, 1, 2]  # Want to infer values of blickets A,B,C
+        evidence = {n_blickets: 1}  # Want detector to be True
+        query_vars = list(range(n_blickets))
+        # Define the RL agent   
+        agent = MultiEnvAgent(buffer_capacity=1000000,
+                              hypothesis_list=hypothesis_list,
+                              lr=lr,
+                    n_blickets=n_blickets,
+                    hidden_size=128, 
+                    device=device)
+
+        # training
+        results, gts = agent.train(total_episodes=total_n_epi, episodes_per_env=episodes_per_env,
+                    random_explore=random_explore, query_vars=query_vars, evidence=evidence, explore_scale=explore_scale,
+                    template_matching_scale=template_matching_scale, inference_interval=5, evaluation_interval=50, evaluation_episodes=10)
+    else:
+        raise ValueError("Invalid model type. Choose 'baseline' or 'causalnet'.")
+    
     print(results)
     print(gts)
-    # plot results
-    plt.plot(list(results.keys()), list(results.values()))
-    plt.xlabel('Episodes')
-    plt.ylabel('Average Reward')
-    # exp = 'random' if random_explore else 'exp{}'.format(explore_scale)
-    # plt.savefig(f'results_seed{seed}_tm{template_matching_scale}_{exp}.png')
-    plt.savefig(f'results_baseline.png')
+    exp = 'random' if random_explore else 'exp{}'.format(explore_scale)
+    title = f'{n_blickets}blickets_seed{seed}_tm{template_matching_scale}_{exp}_lr{lr}' if model=='causalnet' else f'{n_blickets}blickets_seed{seed}_baseline_exp{explore_scale}_lr{lr}'
+    plot_results(results, title)

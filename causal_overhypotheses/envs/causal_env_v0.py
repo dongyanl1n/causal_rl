@@ -5,7 +5,7 @@ import random
 
 from gym import spaces
 
-from typing import Dict, Any, Tuple, List, Set
+from typing import Dict, Any, Tuple, List, Set, Type
 
 
 class Hypothesis():
@@ -435,22 +435,7 @@ class CausalEnv_v1(gym.Env):
             pass  # assume symbolic for now
 
         # Add the hypothesis spaces
-        self._hypotheses: List[Hypothesis] = env_config.get(
-            "hypotheses",
-            [
-                ABconj,
-                ACconj,
-                BCconj,
-                # ABCconj,
-                Adisj,
-                Bdisj,
-                Cdisj,
-                # ABdisj,
-                # ACdisj,
-                # BCdisj,
-                # ABCdisj,
-            ],
-        )
+        self._hypotheses: List[Type[Hypothesis]] = env_config.get("hypotheses", [])
 
         # Setup the environment by default
         self._current_gt_hypothesis = random.choice(self._hypotheses)
@@ -514,16 +499,44 @@ class CausalEnv_v1(gym.Env):
         self._steps += 1
         return observation, reward, done, info
     
+def generate_hypothesis(hyp: str) -> Type[Hypothesis]:
+    """
+    Given a string representation of a hypothesis, generate the corresponding hypothesis class.
+    """
+    # Example usage:
+    # n_blickets = 5  # number of possible blickets
+    # hypothesis_list = ["ABDdisj"]  # List of hypotheses
+    # hypothesis = generate_hypotheses(n_blickets, hypothesis_list)
+    assert type(hyp) == str, "Hypothesis must be a string"
+    blickets, structure = hyp[:-4], hyp[-4:]
+    blicket_indices = [ord(b) - ord('A') for b in blickets]
+
+    if structure == 'conj':
+        class CustomConjunctiveHypothesis(ConjunctiveHypothesis):
+            blickets = set(blicket_indices)
+            name = hyp
+        hypothesis = CustomConjunctiveHypothesis
+    elif structure == 'disj':
+        class CustomDisjunctiveHypothesis(DisjunctiveHypothesis):
+            blickets = set(blicket_indices)
+            name = hyp
+        hypothesis = CustomDisjunctiveHypothesis
+
+    return hypothesis
 
 def test_env():
     args = {
         'num_trajectories': 10,
         'max_steps': 20,
         'add_step_reward_penalty': False,
-        'add_quiz_positive_reward': False
+        'add_quiz_positive_reward': True
     }
 
+    hypotheses = ["ABconj", "CDconj", "BDconj", "Adisj", "Bdisj", "Ddisj"]
+    hypotheses = [generate_hypothesis(h) for h in hypotheses]
     env = CausalEnv_v1({
+        "n_blickets": 4,
+        'hypotheses': hypotheses,
         "max_steps": args["max_steps"],
         "add_step_reward_penalty": args["add_step_reward_penalty"],
         "add_quiz_positive_reward": args["add_quiz_positive_reward"]
@@ -534,7 +547,7 @@ def test_env():
         print(f"====== Episode {i+1} ==========")
         # Reset the environment
         obs = env.reset()
-        gt = str(env._current_gt_hypothesis).split("'")[1].split('.')[-1]
+        gt = env._current_gt_hypothesis.name
         print(f"Ground truth is {gt}")
 
         # Roll out the environment for n steps
