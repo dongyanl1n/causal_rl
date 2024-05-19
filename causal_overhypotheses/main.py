@@ -552,7 +552,6 @@ def plot_results(results, title):
 
 
 if __name__ == '__main__':
-    
     hypothesis_list = generate_hypothesis_list(n_blickets)
     if model=='baseline':
         baseline_agent = MultiEnvBaselineAgent(hypothesis_list=hypothesis_list,
