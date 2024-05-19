@@ -35,9 +35,8 @@ print(f"Episodes per environment: {episodes_per_env}")
 print(f"Model: {model}")
 print(f"Learning rate: {lr}")
 if model=='causalnet':
-    print(f"Random explore: {random_explore}")
-    if not random_explore:
-        print(f"Explore scale: {explore_scale}")
+    print(f"Random explore during exploration phase: {random_explore}")
+    print(f"Explore scale: {explore_scale}")
     print(f"Template matching scale: {template_matching_scale}")
 elif model=='baseline':
     print(f"Explore scale: {explore_scale}")
@@ -58,14 +57,14 @@ if torch.cuda.is_available() and use_cuda:
 else:
     device = torch.device('cpu')
 
-from envs.causal_env_v0 import CausalEnv_v1, generate_hypothesis
+from envs.causal_env_v0 import CausalEnv_v1, generate_hypothesis, generate_hypothesis_list
 from models.replay_buffer import ReplayBuffer
 from models.core import Core
 from models.baseline_core import BaselineCore
 import pandas as pd
-from pgmpy.estimators import MmhcEstimator
+from pgmpy.estimators import PC
 from pgmpy.models import BayesianNetwork
-from pgmpy.estimators import MaximumLikelihoodEstimator
+from pgmpy.estimators import BayesianEstimator
 from pgmpy.inference import VariableElimination
 from collections import defaultdict
 from collections import deque
@@ -167,6 +166,8 @@ class MultiEnvAgent:
     
     def calculate_match_score_to_template(self, action, env=None, state=None):
         r_total = 0
+        if len(self.template_actions) == 0:
+            return 0
         for template_action in self.template_actions:
             # calculate cosine similarity between action (one-hot vector) and template_action (one-hot vector)
             assert len(action) == len(template_action), "Action and template action have different lengths."
@@ -252,12 +253,14 @@ class MultiEnvAgent:
                         env_action = integer_action_to_tuple(action, self.n_blickets)
                         next_state, reward, done, _ = self.env.step(env_action)
                         intrinsic_reward = self.calculate_match_score_to_template(torch.eye(self.n_blickets*2)[action])
-                        total_reward = reward + template_matching_scale * intrinsic_reward
+                        explore_reward = self.compute_explore_intrinsic_reward(env=self.env, state=state, action=action)
+                        total_reward = reward + template_matching_scale * intrinsic_reward + explore_scale * explore_reward
                         rewards.append(total_reward)
                         log_probs.append(log_prob)
                         values.append(value)
                         dones.append(done)
                         state = next_state
+                        self.replay_buffer.push(state, action, reward, next_state, done)
                     
                     loss = self.core.learn(log_probs, values, rewards, dones, self.phase, retain_graph=True)  # calls loss.backward
                     losses.append(loss)
@@ -284,6 +287,13 @@ class MultiEnvAgent:
         assert self.has_converged(), "Model has not converged yet."
         assert isinstance(self.model, BayesianNetwork), "Stored model is not a BayesianModel."
         assert self.model.check_model(), "The Bayesian model is not valid."
+        # Filter out evidence nodes that do not exist in the model
+        valid_evidence = {var: value for var, value in evidence.items() if var in self.model.nodes()}
+        
+        if not valid_evidence:
+            # Handle the case where no valid evidence nodes are present
+            print("No valid evidence nodes found in the model.")
+            return {var: None for var in query_vars}, []
         
         inference_engine = VariableElimination(self.model)
         results = {}
@@ -326,13 +336,17 @@ class MultiEnvAgent:
     
     def infer_causal_graph(self):
         data = pd.DataFrame([entry[0] for entry in self.replay_buffer.get_all_data()])
+        data = data.astype(int)
+        data = data.drop_duplicates()
+        data = data.reindex(data.index.repeat(10))
+        data = data.sample(frac=1).reset_index(drop=True)
         if data.empty:
             return None
-        mmhc_estimator = MmhcEstimator(data)
-        structure = mmhc_estimator.estimate()
+        pc = PC(data)
+        structure = pc.estimate()
         model = BayesianNetwork(structure.edges())
-        # Here we need to fit the CPDs using, for example, Maximum Likelihood Estimation
-        model.fit(data, estimator=MaximumLikelihoodEstimator)
+        # Here we need to fit the CPDs
+        model.fit(data, estimator=BayesianEstimator)
         self.model = model
         return self.model
     
@@ -539,14 +553,7 @@ def plot_results(results, title):
 
 if __name__ == '__main__':
     
-    hypothesis_list = ['Adisj', 'Bdisj', 'Cdisj', 'Ddisj', 
-                       'ABdisj', 'ACdisj', 'ADdisj','ABconj', 'ACconj', 'ADconj',
-                       'BCdisj', 'BDdisj','BCconj', 'BDconj',
-                       'CDdisj','CDconj',
-                       'ABCdisj', 'ABDdisj', 'ABCconj', 'ABDconj', 
-                       'ACDdisj','ACDconj',
-                       'BCDdisj','BCDconj',
-                       'ABCDdisj', 'ABCDconj']
+    hypothesis_list = generate_hypothesis_list(n_blickets)
     if model=='baseline':
         baseline_agent = MultiEnvBaselineAgent(hypothesis_list=hypothesis_list,
                                                lr=lr,
@@ -576,6 +583,6 @@ if __name__ == '__main__':
     
     print(results)
     print(gts)
-    exp = 'random' if random_explore else 'exp{}'.format(explore_scale)
-    title = f'{n_blickets}blickets_seed{seed}_tm{template_matching_scale}_{exp}_lr{lr}' if model=='causalnet' else f'{n_blickets}blickets_seed{seed}_baseline_exp{explore_scale}_lr{lr}'
+    exp = '_random' if random_explore else ''
+    title = f'{n_blickets}blickets_seed{seed}_tm{template_matching_scale}_exp{explore_scale}{exp}_lr{lr}' if model=='causalnet' else f'{n_blickets}blickets_seed{seed}_baseline_exp{explore_scale}_lr{lr}'
     plot_results(results, title)
