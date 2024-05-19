@@ -524,6 +524,25 @@ def generate_hypothesis(hyp: str) -> Type[Hypothesis]:
 
     return hypothesis
 
+
+def generate_hypothesis_list(n_blickets, condition='both'):
+    from itertools import combinations
+    conditions = ['conj', 'disj'] if condition == 'both' else [condition]
+    hypothesis_list = []
+    
+    blickets = [chr(65 + i) for i in range(n_blickets)]
+    
+    for r in range(1, n_blickets + 1):
+        for combo in combinations(blickets, r):
+            combo_str = ''.join(combo)
+            if len(combo) == 1:
+                hypothesis_list.append(combo_str + 'disj')
+            else:
+                for cond in conditions:
+                    hypothesis_list.append(combo_str + cond)
+    
+    return hypothesis_list
+
 def test_env():
     args = {
         'num_trajectories': 10,
@@ -532,8 +551,8 @@ def test_env():
         'add_quiz_positive_reward': True
     }
 
-    hypotheses = ["ABconj", "CDconj", "BDconj", "Adisj", "Bdisj", "Ddisj"]
-    hypotheses = [generate_hypothesis(h) for h in hypotheses]
+    hypotheses = generate_hypothesis_list(n_blickets=4)  # list of strings
+    hypotheses = [generate_hypothesis(h) for h in hypotheses]  # list of hypothesis classes
     env = CausalEnv_v1({
         "n_blickets": 4,
         'hypotheses': hypotheses,
@@ -568,6 +587,56 @@ def test_env():
             # Check if the episode has ended
             if done:
                 break
+    
+    #======== Generate observation data and save as csv =============
+    # args = {
+    #     'num_trajectories': 20,
+    #     'max_steps': 100,
+    #     'add_step_reward_penalty': False,
+    #     'add_quiz_positive_reward': False
+    # }
+
+    # hypotheses = generate_hypothesis_list(n_blickets=4)
+    # for hypo in hypotheses:
+    #     observs = []
+    #     env = CausalEnv_v1({
+    #         "n_blickets": 4,
+    #         'hypotheses': [generate_hypothesis(hypo)],
+    #         "max_steps": args["max_steps"],
+    #         "add_step_reward_penalty": args["add_step_reward_penalty"],
+    #         "add_quiz_positive_reward": args["add_quiz_positive_reward"]
+    #     })
+    #     # Roll out the environment for k trajectories
+    #     for i in range(args['num_trajectories']):
+    #         # print(f"====== Episode {i+1} ==========")
+    #         # Reset the environment
+    #         obs = env.reset()
+    #         gt = env._current_gt_hypothesis.name
+    #         # print(f"Ground truth is {gt}")
+
+    #         # Roll out the environment for n steps
+    #         steps = []
+    #         for j in range(args['max_steps']):
+    #             # print(f"-- step {j+1} --")
+    #             # Get the action from the model
+    #             action = env.action_space.sample()
+    #             # print(f"sampled action {action}")
+
+    #             # Step the environment
+    #             n_obs, reward, done, info = env.step(action)
+    #             # print(f"received reward {reward}. Next observation will be {n_obs}.")
+    #             observs.append(n_obs)
+
+    #             steps.append((obs, action, reward, n_obs, done))
+    #             obs = n_obs
+
+    #             # Check if the episode has ended
+    #             if done:
+    #                 break
+    #     observs = np.array(observs)
+    #     # save observs as csv file
+    #     np.savetxt(f"{hypo}.csv", observs, delimiter=",")
+
 
 if __name__ == "__main__":
     test_env()
