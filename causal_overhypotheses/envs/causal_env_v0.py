@@ -5,7 +5,7 @@ import random
 
 from gym import spaces
 
-from typing import Dict, Any, Tuple, List, Set
+from typing import Dict, Any, Tuple, List, Set, Type
 
 
 class Hypothesis():
@@ -409,26 +409,17 @@ class CausalEnv_v1(gym.Env):
         """
 
         self._n_blickets = env_config.get("n_blickets", 3)  # Start with 3 blickets
-        self._reward_structure = env_config.get("reward_structure", "baseline")  # Start with baseline reward structure
         self._symbolic = env_config.get("symbolic", True)  # Start with symbolic observation space
-
-        if self._reward_structure not in ("baseline", "quiz", "quiz-type", "quiz-typeonly"):
-            raise ValueError(
-                "Invalid reward structure: {}, must be one of (baseline, quiz, quiz-type, quiz-typeonly)".format(self._reward_structure)
-            )
 
         # Setup penalties and reward structures
         self._add_step_reward_penalty = env_config.get("add_step_reward_penalty", False)
         self._add_detector_state_reward_for_quiz = env_config.get("add_detector_state_reward_for_quiz", False)
+        self._add_quiz_positive_reward = env_config.get("add_quiz_positive_reward", False)
         self._step_reward_penalty = env_config.get("step_reward_penalty", 0.01)
         self._detector_reward = env_config.get("detector_reward", 0)  # No detector reward in this version
         self._quiz_positive_reward = env_config.get("quiz_positive_reward", 1)
-        self._quiz_negative_reward = env_config.get("quiz_negative_reward", -1)
         self._max_steps = env_config.get("max_steps", 100)  # max number of steps agent can take to explore, before forced to enter quiz stage
         self._blicket_dim = env_config.get("blicket_dim", 3)
-        self._quiz_disabled_steps = env_config.get("quiz_disabled_steps", -1)
-
-        assert self._max_steps >= self._quiz_disabled_steps, "Max baseline steps must be greater than quiz-disabled steps."
 
         # Gym environment setup
         self.action_space = spaces.Tuple((
@@ -437,40 +428,19 @@ class CausalEnv_v1(gym.Env):
         ))  # assume baseline for now
 
         if self._symbolic:
-            if 'quiz' in self._reward_structure:
-                self.observation_space = spaces.Box(
-                    low=0, high=1, shape=(self._n_blickets + 1,), dtype=np.float32
-                )
-            else:
-                self.observation_space = spaces.Box(
+            self.observation_space = spaces.Box(
                     low=0, high=1, shape=(self._n_blickets + 1,), dtype=np.float32
                 )  # The state of all of the blickets, plus the state of the detector
         else:
             pass  # assume symbolic for now
 
         # Add the hypothesis spaces
-        self._hypotheses: List[Hypothesis] = env_config.get(
-            "hypotheses",
-            [
-                ABconj,
-                ACconj,
-                BCconj,
-                # ABCconj,
-                Adisj,
-                Bdisj,
-                Cdisj,
-                # ABdisj,
-                # ACdisj,
-                # BCdisj,
-                # ABCdisj,
-            ],
-        )
+        self._hypotheses: List[Type[Hypothesis]] = env_config.get("hypotheses", [])
 
         # Setup the environment by default
         self._current_gt_hypothesis = random.choice(self._hypotheses)
         self._steps = 0
         self._observations = 0
-        self._quiz_step = None
 
         self.reset()
 
@@ -480,43 +450,22 @@ class CausalEnv_v1(gym.Env):
 
         # Reset the step trackers
         self._steps = 0
-        self._quiz_step = None
         self.blickets = np.zeros(self._n_blickets)  # states of the object
 
         # Get the baseline observation
         return self._get_observation(blickets=self.blickets)
-    
-    def _get_baseline_observation(self, blickets: np.ndarray) -> np.ndarray:
-        if self._symbolic:
-            return np.concatenate(
-                [
-                    blickets,
-                    np.array([1]) if self._get_detector_state(blickets) else np.array([0]),
-                ],
-                axis=0,
-            )
-        else:
-            pass  # assume symbolic for now
-
-    def _get_quiz_observation(self, blickets: np.ndarray) -> np.ndarray:
-        if self._symbolic:
-            return np.concatenate(
-                [
-                    blickets,
-                    np.array([1]) if self._get_detector_state(blickets) else np.array([0]),
-                ],
-                axis=0,
-            )
-        else:
-            pass  # assume symbolic for now
-
 
     def _get_observation(self, blickets: np.ndarray) -> np.ndarray:
-        if self._reward_structure == "baseline":
-            return self._get_baseline_observation(blickets)
-        elif 'quiz' in self._reward_structure:
-            return self._get_quiz_observation(blickets)
-        raise ValueError("Invalid reward structure: {}".format(self._reward_structure))
+        if self._symbolic:
+            return np.concatenate(
+                [
+                    blickets,
+                    np.array([1]) if self._get_detector_state(blickets) else np.array([0]),
+                ],
+                axis=0,
+            )
+        else:
+            pass  # assume symbolic for now
     
     def _get_detector_state(self, active_blickets: np.ndarray) -> bool:
         blickets_on = set()
@@ -530,65 +479,94 @@ class CausalEnv_v1(gym.Env):
         observation, reward, done, info = (None, 0, False, {})
 
         # Generate the observations and reward
-        if self._reward_structure == "baseline":
-            # note that action is now intervention
-            self.blickets[action[0]] = action[-1]
-            observation = self._get_baseline_observation(self.blickets)
+        # note that action is now intervention
+        self.blickets[action[0]] = action[-1]
+        observation = self._get_observation(self.blickets)
 
-            # Get the reward
-            if self._add_step_reward_penalty:
-                reward -= self._step_reward_penalty
-            if self._get_detector_state(self.blickets):
-                reward += self._detector_reward
+        # Get the reward
+        if self._add_step_reward_penalty:
+            reward -= self._step_reward_penalty
+        if self._add_detector_state_reward_for_quiz and self._get_detector_state(self.blickets):
+            reward += self._detector_reward
+        if self._add_quiz_positive_reward and set(np.where(self.blickets == 1)[0]) == self._current_gt_hypothesis.blickets:
+            reward += self._quiz_positive_reward
+            done = True
+        else:
             done = self._steps > self._max_steps
-
-        elif 'quiz' in self._reward_structure:
-            # note that action is now intervention
-            self.blickets[action[0]] = action[-1]
-            observation = self._get_baseline_observation(self.blickets)
-
-            if self._add_step_reward_penalty:
-                reward -= self._step_reward_penalty
-            if self._get_detector_state(self.blickets):
-                reward += self._detector_reward
-
-            # Give quiz reward
-            if set(np.where(self.blickets == 1)[0]) == self._current_gt_hypothesis.blickets:
-                reward += self._quiz_positive_reward
-                done = True
-            else:
-                done = self._steps > self._max_steps
 
         assert observation is not None
 
         self._steps += 1
         return observation, reward, done, info
     
+def generate_hypothesis(hyp: str) -> Type[Hypothesis]:
+    """
+    Given a string representation of a hypothesis, generate the corresponding hypothesis class.
+    """
+    # Example usage:
+    # n_blickets = 5  # number of possible blickets
+    # hypothesis_list = ["ABDdisj"]  # List of hypotheses
+    # hypothesis = generate_hypotheses(n_blickets, hypothesis_list)
+    assert type(hyp) == str, "Hypothesis must be a string"
+    blickets, structure = hyp[:-4], hyp[-4:]
+    blicket_indices = [ord(b) - ord('A') for b in blickets]
+
+    if structure == 'conj':
+        class CustomConjunctiveHypothesis(ConjunctiveHypothesis):
+            blickets = set(blicket_indices)
+            name = hyp
+        hypothesis = CustomConjunctiveHypothesis
+    elif structure == 'disj':
+        class CustomDisjunctiveHypothesis(DisjunctiveHypothesis):
+            blickets = set(blicket_indices)
+            name = hyp
+        hypothesis = CustomDisjunctiveHypothesis
+
+    return hypothesis
+
+
+def generate_hypothesis_list(n_blickets, condition='both'):
+    from itertools import combinations
+    conditions = ['conj', 'disj'] if condition == 'both' else [condition]
+    hypothesis_list = []
+    
+    blickets = [chr(65 + i) for i in range(n_blickets)]
+    
+    for r in range(1, n_blickets + 1):
+        for combo in combinations(blickets, r):
+            combo_str = ''.join(combo)
+            if len(combo) == 1:
+                hypothesis_list.append(combo_str + 'disj')
+            else:
+                for cond in conditions:
+                    hypothesis_list.append(combo_str + cond)
+    
+    return hypothesis_list
 
 def test_env():
     args = {
         'num_trajectories': 10,
         'max_steps': 20,
-        'quiz_disabled_steps': -1,
-        'reward_structure': 'quiz',
-        'add_step_reward_penalty': True
+        'add_step_reward_penalty': False,
+        'add_quiz_positive_reward': True
     }
 
+    hypotheses = generate_hypothesis_list(n_blickets=4)  # list of strings
+    hypotheses = [generate_hypothesis(h) for h in hypotheses]  # list of hypothesis classes
     env = CausalEnv_v1({
-        "reward_structure":  args['reward_structure'],
-        "quiz_disabled_steps": args['quiz_disabled_steps'],
+        "n_blickets": 4,
+        'hypotheses': hypotheses,
         "max_steps": args["max_steps"],
-        "add_step_reward_penalty": args["add_step_reward_penalty"]
+        "add_step_reward_penalty": args["add_step_reward_penalty"],
+        "add_quiz_positive_reward": args["add_quiz_positive_reward"]
     })
 
     # Roll out the environment for k trajectories
-    print('Collecting Trajectories...')
-    trajectories = []
     for i in range(args['num_trajectories']):
         print(f"====== Episode {i+1} ==========")
         # Reset the environment
         obs = env.reset()
-        gt = str(env._current_gt_hypothesis).split("'")[1].split('.')[-1]
+        gt = env._current_gt_hypothesis.name
         print(f"Ground truth is {gt}")
 
         # Roll out the environment for n steps
@@ -609,6 +587,56 @@ def test_env():
             # Check if the episode has ended
             if done:
                 break
+    
+    #======== Generate observation data and save as csv =============
+    # args = {
+    #     'num_trajectories': 20,
+    #     'max_steps': 100,
+    #     'add_step_reward_penalty': False,
+    #     'add_quiz_positive_reward': False
+    # }
+
+    # hypotheses = generate_hypothesis_list(n_blickets=4)
+    # for hypo in hypotheses:
+    #     observs = []
+    #     env = CausalEnv_v1({
+    #         "n_blickets": 4,
+    #         'hypotheses': [generate_hypothesis(hypo)],
+    #         "max_steps": args["max_steps"],
+    #         "add_step_reward_penalty": args["add_step_reward_penalty"],
+    #         "add_quiz_positive_reward": args["add_quiz_positive_reward"]
+    #     })
+    #     # Roll out the environment for k trajectories
+    #     for i in range(args['num_trajectories']):
+    #         # print(f"====== Episode {i+1} ==========")
+    #         # Reset the environment
+    #         obs = env.reset()
+    #         gt = env._current_gt_hypothesis.name
+    #         # print(f"Ground truth is {gt}")
+
+    #         # Roll out the environment for n steps
+    #         steps = []
+    #         for j in range(args['max_steps']):
+    #             # print(f"-- step {j+1} --")
+    #             # Get the action from the model
+    #             action = env.action_space.sample()
+    #             # print(f"sampled action {action}")
+
+    #             # Step the environment
+    #             n_obs, reward, done, info = env.step(action)
+    #             # print(f"received reward {reward}. Next observation will be {n_obs}.")
+    #             observs.append(n_obs)
+
+    #             steps.append((obs, action, reward, n_obs, done))
+    #             obs = n_obs
+
+    #             # Check if the episode has ended
+    #             if done:
+    #                 break
+    #     observs = np.array(observs)
+    #     # save observs as csv file
+    #     np.savetxt(f"{hypo}.csv", observs, delimiter=",")
+
 
 if __name__ == "__main__":
     test_env()
