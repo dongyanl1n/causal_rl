@@ -1,17 +1,28 @@
 import wandb
+from wandb.integration.sb3 import WandbCallback
+from typing import Callable
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.evaluation import evaluate_policy
 from minigrid.wrappers import ImgObsWrapper
 from stable_baselines3 import PPO
-from env import GridBlicketEnv
+from env import MultiDoorKeyEnv
 import torch.nn as nn
-import gym
+import gymnasium as gym
 import torch
 import argparse
 
-parser = argparse.ArgumentParser(description="Train PPO on GridBlicketEnv")
-parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate for PPO")
+parser = argparse.ArgumentParser(description="Train PPO on MultiDoorKeyEnv")
+parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate for PPO")
+parser.add_argument("--total_timesteps", type=float, default=2e6, help="Total timesteps for training")
+parser.add_argument("--n_keys", type=int, default=3, help="Number of keys in the environment")
+parser.add_argument("--size", type=int, default=8, help="Size of the environment")
 args = parser.parse_args()
+print(args)
+
+if torch.cuda.is_available():
+    device = "cuda"
+else:
+    device = "cpu"
 
 class MinigridFeaturesExtractor(BaseFeaturesExtractor):
     def __init__(self, observation_space: gym.Space, features_dim: int = 512, normalized_image: bool = False) -> None:
@@ -36,45 +47,80 @@ class MinigridFeaturesExtractor(BaseFeaturesExtractor):
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         return self.linear(self.cnn(observations))
 
-policy_kwargs = dict(
-    features_extractor_class=MinigridFeaturesExtractor,
-    features_extractor_kwargs=dict(features_dim=256),  # Increase the feature dimension size
-    net_arch=[dict(pi=[256, 256], vf=[256, 256])]  # Increase the size of the PPO model
-)
 
-# env = gym.make("MiniGrid-Empty-16x16-v0", render_mode="rgb_array")
-env = GridBlicketEnv(render_mode='rgb_array')
+def linear_schedule(initial_value: float) -> Callable[[float], float]:
+    """
+    Linear learning rate schedule.
+
+    :param initial_value: Initial learning rate.
+    :return: schedule that computes
+      current learning rate depending on remaining progress
+    """
+    def func(progress_remaining: float) -> float:
+        """
+        Progress will decrease from 1 (beginning) to 0.
+
+        :param progress_remaining:
+        :return: current learning rate
+        """
+        return progress_remaining * initial_value
+
+    return func
+
+config = {
+    "lr": args.lr,
+    "total_timesteps": int(args.total_timesteps),
+    "n_keys": args.n_keys
+}
+
+run = wandb.init(
+    project="grid_blicket_env", 
+    entity="dongyanl1n",
+    name=f"lr{args.lr}_n_keys{args.n_keys}_size{args.size}",
+    config=config,
+    sync_tensorboard=True,
+    dir="/network/scratch/l/lindongy/grid_blickets"
+    )
+
+# Create the environment
+env = MultiDoorKeyEnv(n_keys=args.n_keys, size=args.size, render_mode='rgb_array')
 env = ImgObsWrapper(env)
 
-wandb.init(project="grid_blicket_env", entity="dongyanl1n",name=f"lr{args.lr}")
-
-# Initialize wandb callback
-class WandbCallback(BaseCallback):
-    def __init__(self):
-        super(WandbCallback, self).__init__()
-
-    def _on_step(self) -> bool:
-        wandb.log({"reward": self.locals["rewards"].item()})
-        return True
+policy_kwargs = dict(
+    features_extractor_class=MinigridFeaturesExtractor,
+    features_extractor_kwargs=dict(features_dim=128),  # Increase the feature dimension size
+    net_arch=dict(pi=[256, 256], vf=[256, 256])  # Increase the size of the PPO model
+)
 
 model = PPO(
     "CnnPolicy",
     env,
     policy_kwargs=policy_kwargs,
-    learning_rate=args.lr,  # Adjust the learning rate
-    n_steps=2048,  # Number of steps to run for each environment per update
-    batch_size=64,  # Minibatch size
-    n_epochs=10,  # Number of epochs when optimizing the surrogate loss
-    gamma=0.99,  # Discount factor
-    gae_lambda=0.95,  # Factor for trade-off of bias vs variance for Generalized Advantage Estimator
-    clip_range=0.2,  # Clipping parameter, it can be a function
-    ent_coef=0.01,  # Entropy coefficient
-    verbose=1
+    learning_rate=linear_schedule(args.lr), 
+    verbose=0,
+    tensorboard_log=f"runs/{run.id}",
+    device=device
 )
 
 # Integrate wandb with stable-baselines3
-model.learn(total_timesteps=int(2e7), callback=WandbCallback())
+model.learn(total_timesteps=config["total_timesteps"], 
+            callback=WandbCallback(verbose=0))
 
 # Finish the wandb run
-wandb.finish()
+run.finish()
+
+# Evaluate the model
+mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=10)
+
+print(f"Mean Reward: {mean_reward}, Standard Deviation: {std_reward}")
+
+# Save the model
+# model.save("ppo_gridblickets_minigrid")
+
+# Close the environment
+env.close()
+
+# move the log file to the correct directory
+import os
+os.system(f"mv runs/{run.id} /network/scratch/l/lindongy/grid_blickets/runs/{run.id}")
 
