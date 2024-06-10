@@ -7,32 +7,40 @@ from minigrid.core.world_object import Door, Goal, Key, Wall
 from minigrid.minigrid_env import MiniGridEnv
 import matplotlib.pyplot as plt
 from IPython.display import display, clear_output
+import numpy as np
 
-class GridBlicketEnv(MiniGridEnv):
+class MultiDoorKeyEnv(MiniGridEnv):
     def __init__(self,
-                size=10,
+                size=8,
                 agent_start_pos=(1, 1),
                 agent_start_dir=0,
+                n_keys=1,
                 max_steps: int = None,
                 **kwargs,
             ):
             self.agent_start_pos = agent_start_pos
             self.agent_start_dir = agent_start_dir
+            self.n_keys = n_keys
+
+            self.door_states = [False] * n_keys
 
             if max_steps is None:
-                max_steps = 4 * size**2
+                max_steps = (n_keys+1) * 4 * size**2
             
             mission_space = MissionSpace(mission_func=self._gen_mission)
 
             super().__init__(
                 mission_space=mission_space,
                 grid_size=size,
+                # Set this to True for maximum speed
+                see_through_walls=True,
                 max_steps=max_steps,
                 **kwargs,
             )
+
     @staticmethod
     def _gen_mission():
-        return "grand mission"
+        return "use the key to open the door and then get to the goal"
 
 
     def _gen_grid(self, width, height):
@@ -45,83 +53,115 @@ class GridBlicketEnv(MiniGridEnv):
         # Place the goal square
         self.put_obj(Goal(), width - 2, height - 2)
 
+        # Place the agent
+        if self.agent_start_pos is not None:  # specify the agent start position
+            self.agent_pos = self.agent_start_pos
+            self.agent_dir = self.agent_start_dir
+        else:  # randomize the agent start position
+            self.agent_pos = self.place_agent()
+
         # List of all possible positions except the outer walls
         all_positions = [(x, y) for x in range(1, width - 1) for y in range(1, height - 1)]
         random.shuffle(all_positions)
 
         # Ensure agent start position is not in the list
-        all_positions.remove(self.agent_start_pos)
+        all_positions.remove(self.agent_pos)
 
         # Ensure goal position is not in the list
         all_positions.remove((width - 2, height - 2))
 
         # Randomly place the keys
-        key_positions = [all_positions.pop() for _ in range(3)]
+        key_positions = [all_positions.pop() for _ in range(self.n_keys)]
         for i, pos in enumerate(key_positions):
             self.grid.set(pos[0], pos[1], Key(COLOR_NAMES[i]))
 
         # Randomly place the corresponding doors
-        door_positions = [all_positions.pop() for _ in range(3)]
+        door_positions = [all_positions.pop() for _ in range(self.n_keys)]
         for i, pos in enumerate(door_positions):
             self.grid.set(pos[0], pos[1], Door(COLOR_NAMES[i], is_locked=True))
 
-        # Place the agent
-        if self.agent_start_pos is not None:
-            self.agent_pos = self.agent_start_pos
-            self.agent_dir = self.agent_start_dir
-        else:
-            self.place_agent()
-
-        self.mission = "grand mission"
+        self.mission = "use the key to open the door and then get to the goal"
 
     def reset(self, **kwargs):
         obs, info = MiniGridEnv.reset(self, **kwargs)
-        self.step_count = 0
-        self.carrying = None
-
-        # Generate a new grid
-        self._gen_grid(self.width, self.height)
-
-        # Return the first observation
-        obs = self.gen_obs()
+        self.door_states = [False] * self.n_keys
         return obs, info
 
     def step(self, action):
         self.step_count += 1
-
+        reward = 0
+        terminated = False
+        truncated = False
         # Execute the action
-        observation, reward, terminated, truncated, info = MiniGridEnv.step(self, action)
-
-        # Penalize for each step taken
-        reward -= 0.1
+        # observation, reward, terminated, truncated, info = MiniGridEnv.step(self, action)
 
         # Get the position in front of the agent
         fwd_pos = self.front_pos
         fwd_cell = self.grid.get(*fwd_pos)
 
-        if action == self.actions.toggle:
+        # Rotate left
+        if action == self.actions.left:
+            self.agent_dir -= 1
+            if self.agent_dir < 0:
+                self.agent_dir += 4
+        # Rotate right
+        elif action == self.actions.right:
+            self.agent_dir = (self.agent_dir + 1) % 4
+
+        # Move forward
+        elif action == self.actions.forward:
+            if fwd_cell is None or fwd_cell.can_overlap():
+                self.agent_pos = tuple(fwd_pos)
+            if fwd_cell is not None and fwd_cell.type == "goal":
+                # terminate only if all doors have been opened
+                if all(self.door_states):
+                    terminated = True
+                    reward = self._reward()
+            if fwd_cell is not None and fwd_cell.type == "lava":
+                terminated = True
+
+        # Pick up an object. Used on keys
+        elif action == self.actions.pickup:
+            if fwd_cell and fwd_cell.can_pickup():
+                if self.carrying is None:
+                    self.carrying = fwd_cell
+                    self.carrying.cur_pos = np.array([-1, -1])  # Place the object out of the grid
+                    self.grid.set(fwd_pos[0], fwd_pos[1], None) # Remove the key from the grid
+        # Drop an object. Used on keys
+        elif action == self.actions.drop:
+            if not fwd_cell and self.carrying:
+                self.grid.set(fwd_pos[0], fwd_pos[1], self.carrying)  # Place the key on the grid
+                self.carrying.cur_pos = fwd_pos  # Set the key's position
+                self.carrying = None
+
+        # Toggle/activate an object. Used on doors
+        elif action == self.actions.toggle:
             if fwd_cell is not None and fwd_cell.type == 'door':
                 if fwd_cell.is_locked:
                     # Check if the agent has the corresponding key
                     if self.carrying and self.carrying.color == fwd_cell.color:
                         fwd_cell.is_locked = False
-                        reward += 1
+                        fwd_cell.is_open = True
+                        self.door_states[COLOR_NAMES.index(fwd_cell.color)] = True
                         self.carrying = None  # Drop the key after opening the door
-            elif fwd_cell is not None and fwd_cell.type == 'key':
-                if not self.carrying:
-                    self.carrying = fwd_cell
-                    self.grid.set(*fwd_pos, None)  # Remove the key from the grid
+        
+        # Done action (not used by default)
+        elif action == self.actions.done:
+            pass
 
-        # Check if agent reached the goal
-        if fwd_cell is not None and fwd_cell.type == 'goal':
-            reward += 10  # Additional reward for reaching the goal
-            terminated = True
+        else:
+            raise ValueError(f"Unknown action: {action}")
 
         # Check if the max number of steps is reached
         if self.step_count >= self.max_steps:
             truncated = True
 
-        return observation, reward, terminated, truncated, info
+        if self.render_mode == "human":
+            self.render()
+
+        obs = self.gen_obs()
+
+        return obs, reward, terminated, truncated, {}
 
 # Function to visualize the environment
 def visualize_episode(env, max_steps=100):
@@ -141,7 +181,7 @@ def visualize_episode(env, max_steps=100):
 
 def main():
     # Create the environment
-    env = GridBlicketEnv(render_mode='rgb_array')
+    env = MultiDoorKeyEnv(render_mode='rgb_array')
 
     # Visualize an episode with a random agent
     visualize_episode(env)
