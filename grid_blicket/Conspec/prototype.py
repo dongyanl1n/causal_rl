@@ -1,12 +1,7 @@
-from misc_util import orthogonal_init, xavier_uniform_init
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
-import math
 import numpy as np
-import matplotlib.pyplot as plt
-from a2c_ppo_acktr.utils import init
-import traceback
 
 np.set_printoptions(threshold=10_000)
 torch.set_printoptions(threshold=10_000)
@@ -29,30 +24,23 @@ class prototypes(nn.Module):
         self.prototypes = nn.ParameterList([nn.Parameter(torch.randn(1, self.hidden_size) * 1.) for i in range(num_prototypes)])
         self.cos = nn.CosineSimilarity(dim=2, eps=1e-6)
 
-    def forward(self, hidden, prototype_train):  # obs =  [600, 16, 1, 54, 64]
-        #print('all prototypes: ', len(self.prototypes)) # 8 
-        # print('hidden shape in forward prototype = ', hidden.shape) # hidden.shape = torch.Size([125, 16, 512])
+    def forward(self, hidden, prototype_train):
+        # hidden.shape = torch.Size([ep_length, num_processes, 512])
         out1 = [None] * self.num_prototypes
         cos_scores = [None] * self.num_prototypes
         ortho = [None] * self.num_prototypes
         success_inds = int(hidden.shape[1] / 2)
         for i in range(self.num_prototypes):
-            out1[i] = self.layers2[i](self.layers1[i](hidden))  # hidden = length, minibatch, latent
+            out1[i] = self.layers2[i](self.layers1[i](hidden))
             s1, s2, s3 = out1[i].shape
-            #print('prototype shape=', self.prototypes[i].shape) # self.prototypes[i].shape = torch.Size([1, 1010]))
             prototypes = self.prototypes[i].reshape(1, 1, -1).repeat(s1, 1, 1)
-            #print('in forward fun of prototype class: ', out1[i].shape, prototypes.shape) # out1[i].shape = torch.Size([125, 16, 1010]), prototypes.shape = torch.Size([125, 1, 1010])
             cos_scores[i] = self.cos(out1[i], prototypes)
-            #print('cos scores in prototype forward class: ', cos_scores[i].shape) # cos scores[i]:  torch.Size([125, 16])
-            ortho[i] = F.softmax(cos_scores[i].squeeze() * 100., dim=0)  # length,minibatch,1 --> length,minibatch
+            ortho[i] = F.softmax(cos_scores[i].squeeze() * 100., dim=0)
 
-        cos_scores = torch.stack(cos_scores, dim=2) # stacked cos scores: torch.Size([125, 16, 8])
-        #print('stacked cos scores:', cos_scores.shape) 
-        ortho_scores = torch.stack(ortho, dim=2)  # length,minibatch,keys
-        cos_max, indices = torch.max(cos_scores, dim=0) # cos_max: torch.Size([16, 8])
-        # cos_max = cos_max.squeeze()  # minibatch,keys 
+        cos_scores = torch.stack(cos_scores, dim=2)
+        ortho_scores = torch.stack(ortho, dim=2)
+        cos_max, indices = torch.max(cos_scores, dim=0)
         loss_cos = ((torch.abs(1 - cos_max[:success_inds]).mean(0) + torch.abs( cos_max[success_inds:]).mean(0)).squeeze())
-        #print('prototype train: ', prototype_train) = -1 
         if prototype_train > -0.5:
             loss_cos = loss_cos[prototype_train]
         else:
