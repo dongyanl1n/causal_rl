@@ -1,4 +1,3 @@
-import gym
 import random
 from minigrid.core.constants import COLOR_NAMES
 from minigrid.core.grid import Grid
@@ -21,7 +20,7 @@ class MultiDoorKeyEnv(MiniGridEnv):
             self.agent_start_pos = agent_start_pos
             self.agent_start_dir = agent_start_dir
             self.n_keys = n_keys
-
+            self.size = size
             self.door_states = [False] * n_keys
 
             if max_steps is None:

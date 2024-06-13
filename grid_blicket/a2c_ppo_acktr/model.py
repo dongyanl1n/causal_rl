@@ -2,8 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import sys
-sys.path.insert(0, '/home/mila/l/lindongy/causal_rl/grid_blicket')
+
 from a2c_ppo_acktr.distributions import Bernoulli, Categorical, DiagGaussian
 from a2c_ppo_acktr.utils import init
 
@@ -13,9 +12,9 @@ class Flatten(nn.Module):
         return x.view(x.size(0), -1)
 
 
-class EncoderConSpec(nn.Module):
+class Policy(nn.Module):
     def __init__(self, obs_shape, action_space, base=None, base_kwargs=None):
-        super(EncoderConSpec, self).__init__()
+        super(Policy, self).__init__()
         if base_kwargs is None:
             base_kwargs = {}
         if base is None:
@@ -27,7 +26,6 @@ class EncoderConSpec(nn.Module):
                 raise NotImplementedError
 
         self.base = base(obs_shape[0], **base_kwargs)
-
 
         self.dist = Categorical(self.base.output_size, 4)
 
@@ -45,6 +43,7 @@ class EncoderConSpec(nn.Module):
         raise NotImplementedError
 
     def act(self, inputs, rnn_hxs, masks, deterministic=False):
+
         value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
         dist = self.dist(actor_features)
 
@@ -62,19 +61,13 @@ class EncoderConSpec(nn.Module):
         value, _, _ = self.base(inputs, rnn_hxs, masks)
         return value
 
-
     def evaluate_actions(self, inputs, rnn_hxs, masks, action):
         value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
         dist = self.dist(actor_features)
-
         action_log_probs = dist.log_probs(action)
         dist_entropy = dist.entropy().mean()
 
         return value, action_log_probs, dist_entropy, rnn_hxs
-
-    def retrieve_hiddens(self, inputs, rnn_hxs, masks):
-        value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
-        return actor_features
 
 class NNBase(nn.Module):
     def __init__(self, recurrent, recurrent_input_size, hidden_size):
@@ -176,20 +169,24 @@ class CNNBase(NNBase):
             init_(nn.Conv2d(64, 32, 3, stride=1)), nn.ReLU(), Flatten(),
             init_(nn.Linear(288, hidden_size)), nn.ReLU())
 
+
         init_ = lambda m: init(m, nn.init.orthogonal_, lambda x: nn.init.
                                constant_(x, 0))
 
         self.critic_linear = init_(nn.Linear(hidden_size, 1))
+
         self.train()
 
     def forward(self, inputs, rnn_hxs, masks):
-        #This is the ConSpec encoder, which is learned independently fromthe RL agent's encoder
-        # rnn_hxs.shape = torch.Size([ep_length * num_processes, 1])
-        x = self.main(inputs / 255.0)  # shape: torch.Size([ep_length * num_processes, 512])
-        return self.critic_linear(x), x, rnn_hxs  # x is actor_features, which is the output encoder.retrieve_hiddens
-
-
-
+        #This is the RL agent's encoder, which is learned independently fromthe ConSpec encoder
+        x = self.main(inputs / 255.0)
+        if self.is_recurrent:
+            x, rnn_hxs = self._forward_gru(x, rnn_hxs, masks)
+            ##############################
+            # clip on x if it gets too large
+            x = torch.clamp(x, -1e6, 1e6)
+            ##############################
+        return self.critic_linear(x), x, rnn_hxs
 
 
 class MLPBase(NNBase):
