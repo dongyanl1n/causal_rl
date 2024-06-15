@@ -74,7 +74,7 @@ def get_args():
     parser.add_argument(
         '--num-mini-batch',
         type=int,
-        default=4,
+        default=8,
         help='number of batches for ppo (default: 32)')
     parser.add_argument(
         '--clip-param',
@@ -122,7 +122,7 @@ def get_args():
     parser.add_argument(
         '--recurrent-policy',
         action='store_true',
-        default=True,
+        default=False,
         help='use a recurrent policy')
     parser.add_argument(
         '--use-linear-lr-decay',
@@ -137,6 +137,11 @@ def get_args():
         '--env-name',
         default='MultiDoorKeyEnv-8x8-3keys-v0',
         help='environment to train on (default: MultiDoorKeyEnv-8x8-3keys-v0)')
+    parser.add_argument(
+        '--fully-observed',
+        action='store_true',
+        default=False,
+        help='use fully observed environment')
 
 
     ####################################
@@ -157,17 +162,7 @@ def get_args():
         type=float,
         default=0.2,
         help='lambda for intrinsic reward from ConSpec')
-    parser.add_argument(
-        '--start_checkpoint',
-        type=int,
-        default=100,
-        help='checkpoint interval, one eval per n updates (default: None)')
-    parser.add_argument(
-        '--checkpoint_interval',
-        type=int,
-        default=50,
-        help='checkpoint interval, one eval per n updates (default: None)')
-
+    
     args = parser.parse_args()
 
     args.cuda = not args.no_cuda and torch.cuda.is_available()
