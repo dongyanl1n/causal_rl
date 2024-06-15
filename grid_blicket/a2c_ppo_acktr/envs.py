@@ -32,6 +32,18 @@ class SeededSubprocVecEnv(SubprocVecEnv):
         self.seed_async(seed, index)
         return self.seed_wait(index)
 
+
+def get_env_max_steps(env_name):
+    if env_name.startswith("MiniGrid"):
+        return gym.make(env_name).max_steps
+    elif env_name.startswith("MultiDoorKeyEnv"):  # eg. MultiDoorKeyEnv-8x8-3keys-v0
+        _, size, n_keys, _ = env_name.split('-') # ['MultiDoorKeyEnv', '8x8', '3keys', 'v0']
+        size = int(size.split('x')[0])
+        n_keys = int(n_keys.split('keys')[0])
+        return MultiDoorKeyEnv(n_keys=n_keys, size=size).max_steps
+    else:
+        raise ValueError(f"Unknown MiniGrid-based environment {env_name}")
+    
 class VecMinigrid(SeededSubprocVecEnv):
     def __init__(self, num_envs, env_name, seeds, fully_observed=False):
         if seeds is None:
@@ -41,7 +53,16 @@ class VecMinigrid(SeededSubprocVecEnv):
 
     @staticmethod
     def _make_minigrid_env(env_name, seed, fully_observed):
-        env = gym.make(env_name)
+        if env_name.startswith("MiniGrid"):
+            env = gym.make(env_name)
+        elif env_name.startswith("MultiDoorKeyEnv"):  # eg. MultiDoorKeyEnv-8x8-3keys-v0
+            _, size, n_keys, _ = env_name.split('-') # ['MultiDoorKeyEnv', '8x8', '3keys', 'v0']
+            size = int(size.split('x')[0])
+            n_keys = int(n_keys.split('keys')[0])
+            env = MultiDoorKeyEnv(n_keys=n_keys, size=size)
+        else:
+            raise ValueError(f"Unknown MiniGrid-based environment {env_name}")
+
         # env.seed(seed)
         if fully_observed:
             env = RGBImgObsWrapper(env)
@@ -75,12 +96,11 @@ class VecPyTorchMinigrid(VecEnvWrapper):
 
 def make_minigrid_envs(num_envs, env_name, seeds, device, fully_observed, **kwargs):
     ret_normalization = not kwargs.get('no_ret_normalization', False)
-    max_steps = gym.make(env_name).max_steps
     venv = VecMinigrid(num_envs, env_name, seeds, fully_observed=fully_observed)
     venv = VecMonitor(venv=venv, filename=None)
     venv = VecNormalize(venv=venv, norm_obs=False, norm_reward=ret_normalization)
     envs = VecPyTorchMinigrid(venv, device)
-    return envs, max_steps
+    return envs, get_env_max_steps(env_name)
 
 ############################################################
 
