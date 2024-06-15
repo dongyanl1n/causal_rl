@@ -27,7 +27,7 @@ class Policy(nn.Module):
 
         self.base = base(obs_shape[0], **base_kwargs)
 
-        self.dist = Categorical(self.base.output_size, 4)
+        self.dist = Categorical(self.base.output_size, action_space.n)
 
 
     @property
@@ -157,18 +157,26 @@ class NNBase(nn.Module):
 
 
 class CNNBase(NNBase):
-    def __init__(self, num_inputs, recurrent=False, hidden_size=512):
+    def __init__(self, num_inputs, observation_space, recurrent=False, hidden_size=512):
         super(CNNBase, self).__init__(recurrent, hidden_size, hidden_size)
 
         init_ = lambda m: init(m, nn.init.orthogonal_, lambda x: nn.init.
                                constant_(x, 0), nn.init.calculate_gain('relu'))
+        
+        self.cnn = nn.Sequential(
+            init_(nn.Conv2d(num_inputs, 16, (2, 2))),
+            nn.ReLU(),
+            init_(nn.Conv2d(16, 32, (2, 2))),
+            nn.ReLU(),
+            init_(nn.Conv2d(32, 64, (2, 2))),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+        # Compute shape by doing one forward pass
+        with torch.no_grad():
+            n_flatten = self.cnn(torch.as_tensor(observation_space.sample()[None]).float()).shape[1]
 
-        self.main = nn.Sequential(
-            init_(nn.Conv2d(num_inputs, 32, 8, stride=4)), nn.ReLU(),
-            init_(nn.Conv2d(32, 64, 4, stride=2)), nn.ReLU(),
-            init_(nn.Conv2d(64, 32, 3, stride=1)), nn.ReLU(), Flatten(),
-            init_(nn.Linear(288, hidden_size)), nn.ReLU())
-
+        self.linear = nn.Sequential(init_(nn.Linear(n_flatten, hidden_size)), nn.ReLU())
 
         init_ = lambda m: init(m, nn.init.orthogonal_, lambda x: nn.init.
                                constant_(x, 0))
@@ -179,12 +187,12 @@ class CNNBase(NNBase):
 
     def forward(self, inputs, rnn_hxs, masks):
         #This is the RL agent's encoder, which is learned independently fromthe ConSpec encoder
-        x = self.main(inputs / 255.0)
+        x = self.linear(self.cnn(inputs/255.))
         if self.is_recurrent:
             x, rnn_hxs = self._forward_gru(x, rnn_hxs, masks)
             ##############################
             # clip on x if it gets too large
-            x = torch.clamp(x, -1e6, 1e6)
+            # x = torch.clamp(x, -1e10, 1e10)
             ##############################
         return self.critic_linear(x), x, rnn_hxs
 
