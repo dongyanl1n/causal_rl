@@ -9,7 +9,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-from misc import Logger, save_video, save_gif
 from a2c_ppo_acktr import algo, utils
 from a2c_ppo_acktr.envs import make_minigrid_envs
 from a2c_ppo_acktr.model import Policy  # taken from ConSpec repo's a2c_ppo_acktr/modelRL.py
