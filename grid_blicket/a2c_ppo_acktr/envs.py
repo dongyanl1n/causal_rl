@@ -6,77 +6,83 @@ import torch
 from gymnasium.spaces.box import Box
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import (DummyVecEnv, SubprocVecEnv,
-                                              VecEnvWrapper)
+                                              VecEnvWrapper, VecMonitor, VecNormalize)
 from stable_baselines3.common.vec_env.vec_normalize import \
     VecNormalize as VecNormalize_
-from minigrid.wrappers import ImgObsWrapper, RGBImgPartialObsWrapper
+from minigrid.wrappers import ImgObsWrapper, RGBImgPartialObsWrapper, RGBImgObsWrapper
+from functools import partial
 sys.path.insert(0, '/home/mila/l/lindongy/causal_rl/grid_blicket')
-from env import MultiDoorKeyEnv
+from multidoorkey_env import MultiDoorKeyEnv
 
+############### code taken from prioritized level replay but adapted to SB3 ###############
+class SeededSubprocVecEnv(SubprocVecEnv):
+    def __init__(self, env_fns):
+        super().__init__(env_fns)
 
-def make_env(env_id, seed, rank, log_dir, allow_early_resets):
-    def _thunk():
-        if env_id.startswith("MultiDoorKeyEnv"):  # eg. MultiDoorKeyEnv-8x8-3keys-v0
-            _, size, n_keys, _ = env_id.split('-') # ['MultiDoorKeyEnv', '8x8', '3keys', 'v0']
-            size = int(size.split('x')[0])
-            n_keys = int(n_keys.split('keys')[0])
-            env = MultiDoorKeyEnv(n_keys=n_keys, size=size)
-            env = RGBImgPartialObsWrapper(env) # Get pixel observations
-            env = ImgObsWrapper(env)  # Get rid of the 'mission' field
-        elif env_id.startswith("MiniGrid"):  # Standard MiniGrid env, eg. MiniGrid-Empty-8x8-v0, MiniGrid-LockedRoom-v0
-            env = gym.make(env_id)
-            env = RGBImgPartialObsWrapper(env)
-            env = ImgObsWrapper(env)
+    def seed_async(self, seed, index):
+        self.remotes[index].send(('seed', seed))
+        self.waiting = True
+
+    def seed_wait(self, index):
+        obs = self.remotes[index].recv()
+        self.waiting = False
+        return obs
+
+    def seed(self, seed, index):
+        self.seed_async(seed, index)
+        return self.seed_wait(index)
+
+class VecMinigrid(SeededSubprocVecEnv):
+    def __init__(self, num_envs, env_name, seeds, fully_observed=False):
+        if seeds is None:
+            seeds = [int.from_bytes(os.urandom(4), byteorder="little") for _ in range(num_envs)]
+        env_fn = [partial(self._make_minigrid_env, env_name, seed, fully_observed) for seed in seeds]
+        super().__init__(env_fn)
+
+    @staticmethod
+    def _make_minigrid_env(env_name, seed, fully_observed):
+        env = gym.make(env_name)
+        # env.seed(seed)
+        if fully_observed:
+            env = RGBImgObsWrapper(env)
         else:
-            env = gym.make(env_id)
-
-        if not env_id.startswith("MultiDoorKeyEnv") and not env_id.startswith("MiniGrid"):
-            env.seed(seed + rank)
-
-        if str(env.__class__.__name__).find('TimeLimit') >= 0:
-            env = TimeLimitMask(env)
-
-        if log_dir is not None:
-            env = Monitor(env,
-                          os.path.join(log_dir, str(rank)),
-                          allow_early_resets=allow_early_resets)
-
-        # If the input has shape (W,H,3), wrap for PyTorch convolutions
-        obs_shape = env.observation_space.shape
-        if len(obs_shape) == 3 and obs_shape[2] in [1, 3]:
-            env = TransposeImage(env, op=[2, 0, 1])
-
+            env = RGBImgPartialObsWrapper(env)
+        env = ImgObsWrapper(env)
         return env
 
-    return _thunk
+class VecPyTorchMinigrid(VecEnvWrapper):
+    def __init__(self, venv, device, level_sampler=None):
+        super().__init__(venv)
+        self.device = device
+        self.level_sampler = level_sampler
+        m, n, c = venv.observation_space.shape
+        self.observation_space = Box(low=0, high=255, shape=(c, m, n), dtype=np.uint8)
 
+    def reset(self):
+        obs = self.venv.reset()
+        obs = torch.from_numpy(obs).float().to(self.device)
+        return obs
 
-def make_vec_envs(env_name,
-                  seed,
-                  num_processes,
-                  log_dir,
-                  allow_early_resets,
-                  num_frame_stack=None):
-    envs = [
-        make_env(env_name, seed, i, log_dir, allow_early_resets)
-        for i in range(num_processes)
-    ]
-    max_steps = envs[0]().max_steps
+    def step_async(self, actions):
+        actions = actions.cpu().numpy()
+        self.venv.step_async(actions)
 
-    if len(envs) > 1:
-        envs = SubprocVecEnv(envs)
-    else:
-        envs = DummyVecEnv(envs)
+    def step_wait(self):
+        obs, reward, done, info = self.venv.step_wait()
+        obs = torch.from_numpy(obs).float().to(self.device)
+        reward = torch.from_numpy(reward).unsqueeze(dim=1).float()
+        return obs, reward, done, info
 
-    # envs = VecPyTorch(envs, device)
-
-    # if num_frame_stack is not None:
-    #     envs = VecPyTorchFrameStack(envs, num_frame_stack, device)
-    # elif len(envs.observation_space.shape) == 3:
-    #     envs = VecPyTorchFrameStack(envs, 4, device)
-
+def make_minigrid_envs(num_envs, env_name, seeds, device, fully_observed, **kwargs):
+    ret_normalization = not kwargs.get('no_ret_normalization', False)
+    max_steps = gym.make(env_name).max_steps
+    venv = VecMinigrid(num_envs, env_name, seeds, fully_observed=fully_observed)
+    venv = VecMonitor(venv=venv, filename=None)
+    venv = VecNormalize(venv=venv, norm_obs=False, norm_reward=ret_normalization)
+    envs = VecPyTorchMinigrid(venv, device)
     return envs, max_steps
 
+############################################################
 
 # Checks whether done was caused my timit limits or not
 class TimeLimitMask(gym.Wrapper):
