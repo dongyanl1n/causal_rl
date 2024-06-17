@@ -42,17 +42,17 @@ def main():
         num_envs=args.num_processes, env_name=args.env_name, seeds=None, device=device, fully_observed=args.fully_observed
     )  # use random seeds 
     args.num_steps = max_steps
-    obsspace = envs.observation_space.shape
+    obsspace = envs.observation_space
     actionspace = envs.action_space
-    print('obsspace', obsspace)
+    print('obsspace.shape', obsspace.shape)
     print('actionspace', actionspace)
     print('use_recurrent_policy', args.recurrent_policy)
     print('fully_observed', args.fully_observed)
     actor_critic = Policy(
-        obsspace,
+        obsspace.shape,
         actionspace,
         base_kwargs={'recurrent': args.recurrent_policy,
-                     'observation_space': envs.observation_space})
+                     'observation_space': obsspace})
     actor_critic.to(device)
 
     wandb.init(project="grid_blicket_env", 
@@ -93,7 +93,7 @@ def main():
     ##############################################################
     print('steps', args.num_steps)
     rollouts = RolloutStorage(args.num_steps, args.num_processes,
-                              envs.observation_space.shape, envs.action_space,
+                              obsspace.shape, 
                               actor_critic.recurrent_hidden_state_size, args.num_prototypes)
     rollouts.to(device)
     obs = envs.reset()
