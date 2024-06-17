@@ -7,7 +7,7 @@ def _flatten_helper(T, N, _tensor):
 
 
 class RolloutStorage(object):
-    def __init__(self, num_steps, num_processes, obs_shape, action_space,
+    def __init__(self, num_steps, num_processes, obs_shape, 
                  recurrent_hidden_state_size, head):
         '''
         Standard storage for A2C/PPO algorithms.

@@ -15,15 +15,15 @@ def _flatten_helper(T, N, _tensor):
     return _tensor.view(T * N, *_tensor.size()[2:])
 
 class ConSpec(nn.Module):
-    def __init__(self, args, obsspace,  num_actions, device):
+    def __init__(self, args, obsspace,  actionspace, device):
         super(ConSpec, self).__init__()
 
         """Class that contains everything needed to implement ConSpec
 
             Args:
                 args: the arguments
-                obsspace: shape of the observation space
-                num_actions: number of actions
+                obsspace: observation space. use obsspace.shape to get shape of the observation space
+                actionspace: action space. use actionspace.n to get number of actions
                 device: the device
 
             Usage:
@@ -35,17 +35,18 @@ class ConSpec(nn.Module):
                 self.prototypes = contains the prototype vectors as well as their projection MLPs g_theta from the paper
                 self.optimizerConSpec = the optimizer for the encoder + the prototypes
             """
-
+        num_actions = actionspace.n
         self.encoder = EncoderConSpec(
-            obsspace,
+            obsspace.shape,
             num_actions,
-            base_kwargs={'recurrent': args.recurrent_policy})  # envs.observation_space.shape,
+            base_kwargs={'recurrent': args.recurrent_policy,
+                     'observation_space': obsspace})  # envs.observation_space.shape,
         self.encoder.to(device)
         self.intrinsicR_scale = args.intrinsicR_scale
         self.num_procs = args.num_processes
         self.num_prototypes = args.num_prototypes
         self.seed = args.seed
-        self.rollouts = RolloutStorage(args.num_steps, self.num_procs,obsspace, num_actions,
+        self.rollouts = RolloutStorage(args.num_steps, self.num_procs, obsspace.shape,
                               self.encoder.recurrent_hidden_state_size, self.num_prototypes)
         self.prototypes = prototypes(input_size=self.encoder.recurrent_hidden_state_size, hidden_size=1010, 
                                      num_prototypes=self.num_prototypes, device=device)
@@ -126,11 +127,11 @@ class ConSpec(nn.Module):
             ########################
             for j in range(self.num_prototypes):
                 if prototypes_used[j] > 0.5:
-                    print('frozen prototypes used', j, prototypes_used[j])
+                    # print('frozen prototypes used', j, prototypes_used[j])
                     obs_batch, recurrent_hidden_states_batch, masks_batch, actions_batch, obs_batchorig, reward_batch = self.rollouts.retrieve_SFbuffer_frozen(
                         j)
                 else:
-                    print('still using SF buffer not the frozen one')
+                    # print('still using SF buffer not the frozen one')
                     obs_batch, recurrent_hidden_states_batch, masks_batch, actions_batch, obs_batchorig, reward_batch = self.rollouts.retrieve_SFbuffer()
 
                 cos_max_score, max_inds, cost_prototype, cos_scores, cos_score_sf = self.calc_cos_scores(obs_batch, recurrent_hidden_states_batch, masks_batch,
@@ -139,9 +140,9 @@ class ConSpec(nn.Module):
                 costCL += cost_prototype
                 cos_scores_pos.append(cos_score_sf[0][j].detach().cpu())
                 cos_scores_neg.append(cos_score_sf[1][j].detach().cpu())
-                # self.rollouts.cos_max_scores = cos_max_score
-                # self.rollouts.max_indx = max_inds
-                # self.rollouts.cos_scores = cos_scores
+                self.rollouts.cos_max_scores = cos_max_score
+                self.rollouts.max_indx = max_inds
+                self.rollouts.cos_scores = cos_scores
                 # self.rollouts.cos_score_pos = cos_score_sf[0]
                 # self.rollouts.cos_score_neg = cos_score_sf[1]
 

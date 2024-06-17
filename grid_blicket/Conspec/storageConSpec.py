@@ -7,7 +7,7 @@ def _flatten_helper(T, N, _tensor):
 
 
 class RolloutStorage(object):
-    def __init__(self, num_steps, num_processes, obs_shape, action_space,
+    def __init__(self, num_steps, num_processes, obs_shape, 
                  recurrent_hidden_state_size, num_prototypes):
 
         '''
@@ -35,9 +35,9 @@ class RolloutStorage(object):
         self.actions = torch.zeros(num_steps, num_processes, action_shape)
         self.actions = self.actions.long()
         self.masks = torch.ones(num_steps + 1, num_processes, 1)
-        # self.max_indx = torch.zeros(num_processes, num_prototypes)  # torch.Size([32, 8])
-        # self.cos_scores = torch.zeros(num_steps, num_processes, num_prototypes) # torch.Size([125, 32, 8])
-        # self.cos_max_scores= torch.zeros(num_processes, num_prototypes) # torch.Size([32, 8])
+        self.max_indx = torch.zeros(num_processes, num_prototypes)  # torch.Size([32, 8])
+        self.cos_scores = torch.zeros(num_steps, num_processes, num_prototypes) # torch.Size([125, 32, 8])
+        self.cos_max_scores= torch.zeros(num_processes, num_prototypes) # torch.Size([32, 8])
 
         # Masks that indicate whether it's a true terminal state
         # or time limit end state
