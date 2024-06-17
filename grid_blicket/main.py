@@ -45,8 +45,8 @@ def main():
     device = torch.device("cuda:0" if args.cuda else "cpu")
 
     envs, max_steps = make_minigrid_envs(
-        num_envs=args.num_processes, env_name=args.env_name, seeds=None, device=device, fully_observed=args.fully_observed
-    )  # use random seeds 
+        num_envs=args.num_processes, env_name=args.env_name, seeds=[(args.seed + i) for i in range(args.num_processes)], device=device, fully_observed=args.fully_observed
+    )
     args.num_steps = max_steps
     obsspace = envs.observation_space
     actionspace = envs.action_space

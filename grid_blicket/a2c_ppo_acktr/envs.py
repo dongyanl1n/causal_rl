@@ -63,7 +63,7 @@ class VecMinigrid(SeededSubprocVecEnv):
         else:
             raise ValueError(f"Unknown MiniGrid-based environment {env_name}")
 
-        # env.seed(seed)
+        env.reset(seed=seed)
         if fully_observed:
             env = RGBImgObsWrapper(env)
         else:
