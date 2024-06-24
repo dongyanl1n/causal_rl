@@ -39,7 +39,7 @@ class ConSpec(nn.Module):
         self.encoder = EncoderConSpec(
             obsspace.shape,
             num_actions,
-            base_kwargs={'recurrent': args.recurrent_policy,
+            base_kwargs={'recurrent': args.recurrent_policy,  # only to ensure it has the same hidden size as RL model; forward pass through CNN actually does not include GRU
                      'observation_space': obsspace})  # envs.observation_space.shape,
         self.encoder.to(device)
         self.intrinsicR_scale = args.intrinsicR_scale
@@ -86,13 +86,13 @@ class ConSpec(nn.Module):
             obs_batch, recurrent_hidden_states_batch, masks_batch, actions_batch, obs_batchorig, reward_batch = self.rollouts.retrieve_batch()
             _, _, _, cos_scores, _ = self.calc_cos_scores(obs_batch, recurrent_hidden_states_batch, masks_batch, actions_batch, obs_batchorig, -1)
             cos_scores = cos_scores.view(*obs_batchorig.size()[:2], -1)
-            cos_scores = ((cos_scores > 0.6)) * cos_scores
+            cos_scores = ((cos_scores > 0.6)) * cos_scores  # threshold of 0.6 applied to ignore small score fluctuations
             prototypes_used = torch.tile(torch.reshape(prototypes_used, (1, 1, -1)), (*cos_scores.shape[:2], 1)) # 
 
             prototypes_used = prototypes_used * self.intrinsicR_scale
 
             intrinsic_reward = (cos_scores * prototypes_used)
-            roundhalf = 3
+            roundhalf = 3  # window size = 7
 
             '''find the max rewards in each rolling average (equation 2 of the manuscript)'''
             rolling_max = []
@@ -100,7 +100,7 @@ class ConSpec(nn.Module):
                 temp = torch.roll(intrinsic_reward, i - roundhalf, dims=0)
                 if i - roundhalf > 0:
                     temp[:(i - roundhalf)] = 0.
-                rolling_max.append(temp)  # 80,16,10 heads
+                rolling_max.append(temp)
             rolling_max = torch.stack(rolling_max, dim=0)
             rolling_max, _ = torch.max(rolling_max, dim=0)
             allvaluesdifference = intrinsic_reward - rolling_max
@@ -159,6 +159,7 @@ class ConSpec(nn.Module):
             costCL.backward()
             self.optimizerConSpec.step()
         self.rollouts.store_prototypes_used(prototypes_used, count_prototypes_timesteps_criterion)
+        torch.cuda.empty_cache()
 
     def do_everything(self, obstotal,  recurrent_hidden_statestotal, actiontotal,rewardtotal, maskstotal):
         '''function for doing all the required conspec functions above, in order'''

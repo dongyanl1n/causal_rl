@@ -171,22 +171,14 @@ class CNNBase(NNBase):
                                constant_(x, 0), nn.init.calculate_gain('relu'))
         
         self.cnn = nn.Sequential(
-            init_(nn.Conv2d(num_inputs, 16, (2, 2))),
-            nn.ReLU(),
-            init_(nn.Conv2d(16, 32, (2, 2))),
-            nn.ReLU(),
-            init_(nn.Conv2d(32, 64, (2, 2))),
-            nn.ReLU(),
-            nn.Flatten(),
-        )
+            init_(nn.Conv2d(num_inputs, 32, 3, stride=1, padding='same')), nn.ReLU(),
+            Flatten())
+        
         # Compute shape by doing one forward pass
         with torch.no_grad():
             n_flatten = self.cnn(torch.as_tensor(observation_space.sample()[None]).float()).shape[1]
 
         self.linear = nn.Sequential(init_(nn.Linear(n_flatten, hidden_size)), nn.ReLU())
-
-        init_ = lambda m: init(m, nn.init.orthogonal_, lambda x: nn.init.
-                               constant_(x, 0))
 
         self.critic_linear = init_(nn.Linear(hidden_size, 1))
         self.train()

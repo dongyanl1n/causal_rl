@@ -191,7 +191,7 @@ def main():
             # calculate moving average of ext_rewards and ext_int_rewards to calculate the moving average of intrinsic rewards
             int_rewards_ema = np.mean(ext_int_rewards[-args.num_processes*args.log_interval:]) - np.mean(ext_rewards[-args.num_processes*args.log_interval:])
             # print(f"Updates {j}, num timesteps {total_num_steps}, FPS {int(total_num_steps / (end - start))}")
-            # print(f'Moving average for external rewards: {np.mean(episode_rewards):.5f}, for episode length {np.mean(episode_lengths):.5f} for intrinsic rewards: {int_rewards_ema:.1f}')
+            # print(f'Moving average for external rewards: {np.mean(episode_rewards):.5f}, for episode length {np.mean(episode_lengths):.5f}, for intrinsic rewards: {int_rewards_ema:.1f}')
             wandb.log({
                 'Epoch': j,
                 'total_num_steps': total_num_steps,

@@ -137,12 +137,12 @@ class RolloutStorage(object):
 
     def addPosNeg(self, S_or_F, device):
         '''this is the function for adding the trajectories to success (pos) and failure (neg) memory buffers '''
-        totalreward = self.rewards[-10:].sum(0)
-
+        # self.rewards.shape: ep_length x num_processes x 1
+        totalreward = self.rewards.sum(0)  # use sum of rewards across the timesteps as the total reward
         if S_or_F == 'pos':
             rewardssortgood = torch.nonzero(totalreward > 0.5).reshape(-1, )
             indicesrewardbatch = rewardssortgood[0::2]
-            obsxx = self.obs[:, indicesrewardbatch].to(device)
+            obsxx = self.obs[:, indicesrewardbatch].to(device)  # obs from the good trajectories
             numberaddedxx = obsxx.shape[1]
             if numberaddedxx >1:
                 indicesrewardbatch = rewardssortgood[0:4:2]
