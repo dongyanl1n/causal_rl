@@ -45,14 +45,14 @@ def get_env_max_steps(env_name):
         raise ValueError(f"Unknown MiniGrid-based environment {env_name}")
     
 class VecMinigrid(SeededSubprocVecEnv):
-    def __init__(self, num_envs, env_name, seeds, fully_observed=False):
+    def __init__(self, num_envs, env_name, seeds):
         if seeds is None:
             seeds = [int.from_bytes(os.urandom(4), byteorder="little") for _ in range(num_envs)]
-        env_fn = [partial(self._make_minigrid_env, env_name, seed, fully_observed) for seed in seeds]
+        env_fn = [partial(self._make_minigrid_env, env_name, seed) for seed in seeds]
         super().__init__(env_fn)
 
     @staticmethod
-    def _make_minigrid_env(env_name, seed, fully_observed):
+    def _make_minigrid_env(env_name, seed):
         if env_name.startswith("MiniGrid"):
             env = gym.make(env_name)
         elif env_name.startswith("MultiDoorKeyEnv"):  # eg. MultiDoorKeyEnv-8x8-3keys-v0
@@ -64,10 +64,6 @@ class VecMinigrid(SeededSubprocVecEnv):
             raise ValueError(f"Unknown MiniGrid-based environment {env_name}")
 
         env.reset(seed=seed)
-        if fully_observed:
-            env = RGBImgObsWrapper(env)
-        else:
-            env = RGBImgPartialObsWrapper(env)
         env = ImgObsWrapper(env)
         return env
 
@@ -94,9 +90,9 @@ class VecPyTorchMinigrid(VecEnvWrapper):
         reward = torch.from_numpy(reward).unsqueeze(dim=1).float()
         return obs, reward, done, info
 
-def make_minigrid_envs(num_envs, env_name, seeds, device, fully_observed, **kwargs):
+def make_minigrid_envs(num_envs, env_name, seeds, device, **kwargs):
     ret_normalization = not kwargs.get('no_ret_normalization', False)
-    venv = VecMinigrid(num_envs, env_name, seeds, fully_observed=fully_observed)
+    venv = VecMinigrid(num_envs, env_name, seeds)
     venv = VecMonitor(venv=venv, filename=None)
     venv = VecNormalize(venv=venv, norm_obs=False, norm_reward=ret_normalization)
     envs = VecPyTorchMinigrid(venv, device)
