@@ -137,11 +137,6 @@ def get_args():
         '--env-name',
         default='MultiDoorKeyEnv-8x8-3keys-v0',
         help='environment to train on (default: MultiDoorKeyEnv-8x8-3keys-v0)')
-    parser.add_argument(
-        '--fully-observed',
-        action='store_true',
-        default=False,
-        help='use fully observed environment')
 
 
     ####################################

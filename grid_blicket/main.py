@@ -45,7 +45,7 @@ def main():
     device = torch.device("cuda:0" if args.cuda else "cpu")
 
     envs, max_steps = make_minigrid_envs(
-        num_envs=args.num_processes, env_name=args.env_name, seeds=[(args.seed + i) for i in range(args.num_processes)], device=device, fully_observed=args.fully_observed
+        num_envs=args.num_processes, env_name=args.env_name, seeds=[(args.seed + i) for i in range(args.num_processes)], device=device
     )
     args.num_steps = max_steps
     obsspace = envs.observation_space
@@ -53,7 +53,6 @@ def main():
     print('obsspace.shape', obsspace.shape)
     print('actionspace', actionspace)
     print('use_recurrent_policy', args.recurrent_policy)
-    print('fully_observed', args.fully_observed)
     actor_critic = Policy(
         obsspace.shape,
         actionspace,
