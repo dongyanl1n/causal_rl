@@ -31,15 +31,14 @@ class prototypes(nn.Module):
         ortho = [None] * self.num_prototypes
         success_inds = int(hidden.shape[1] / 2)
         for i in range(self.num_prototypes):
-            out1[i] = self.layers2[i](self.layers1[i](hidden))
-            s1, s2, s3 = out1[i].shape
-            prototypes = self.prototypes[i].reshape(1, 1, -1).repeat(s1, 1, 1)
-            cos_scores[i] = self.cos(out1[i], prototypes)
+            out1[i] = self.layers2[i](self.layers1[i](hidden))  # pass z_t through g_theta
+            s1, s2, s3 = out1[i].shape  # s1 = ep_length, s2 = num_processes, s3 = 1010
+            prototypes = self.prototypes[i].reshape(1, 1, -1).repeat(s1, 1, 1)  # repeat prototype vector for ep_length times --> ep_length, 1, 1010
+            cos_scores[i] = self.cos(out1[i], prototypes) # compare current embedding with prototype at each time --> ep_length, num_processes
             ortho[i] = F.softmax(cos_scores[i].squeeze() * 100., dim=0)
-
-        cos_scores = torch.stack(cos_scores, dim=2)
-        ortho_scores = torch.stack(ortho, dim=2)
-        cos_max, indices = torch.max(cos_scores, dim=0)
+        cos_scores = torch.stack(cos_scores, dim=2)  # ep_length, num_processes, num_prototypes
+        ortho_scores = torch.stack(ortho, dim=2)  # ep_length, num_processes, num_prototypes
+        cos_max, indices = torch.max(cos_scores, dim=0)  # t that maximizes the cosine similarity
         loss_cos = ((torch.abs(1 - cos_max[:success_inds]).mean(0) + torch.abs( cos_max[success_inds:]).mean(0)).squeeze())
         if prototype_train > -0.5:
             loss_cos = loss_cos[prototype_train]

@@ -74,8 +74,8 @@ def get_args():
     parser.add_argument(
         '--num-mini-batch',
         type=int,
-        default=8,
-        help='number of batches for ppo (default: 32)')
+        default=4,
+        help='number of batches for ppo (default: 4)')
     parser.add_argument(
         '--clip-param',
         type=float,
