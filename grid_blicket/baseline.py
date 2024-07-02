@@ -39,15 +39,17 @@ def main():
     device = torch.device("cuda:0" if args.cuda else "cpu")
 
     envs, max_steps = make_minigrid_envs(
-        num_envs=args.num_processes, env_name=args.env_name, seeds=[(args.seed + i) for i in range(args.num_processes)], device=device, fully_observed=args.fully_observed
-    )
+        num_envs=args.num_processes,
+        env_name=args.env_name,
+        seeds=[(args.seed + i) for i in range(args.num_processes)],
+        device=device
+        )
     args.num_steps = max_steps
     obsspace = envs.observation_space
     actionspace = envs.action_space
     print('obsspace.shape', obsspace.shape)
     print('actionspace', actionspace)
     print('use_recurrent_policy', args.recurrent_policy)
-    print('fully_observed', args.fully_observed)
     actor_critic = Policy(
         obsspace.shape,
         actionspace,
@@ -57,7 +59,7 @@ def main():
 
     wandb.init(project="grid_blicket_env", 
             entity="dongyanl1n", 
-            name=f"{args.env_name}-ppo{'-rec' if args.recurrent_policy else ''}{'-FO' if args.fully_observed else '-PO'}-lr{args.lr}-seed{args.seed}",
+            name=f"{args.env_name}-ppo{'-rec' if args.recurrent_policy else ''}-PO-lr{args.lr}-seed{args.seed}",
             dir="/network/scratch/l/lindongy/grid_blickets",
             config=args)
 
@@ -94,7 +96,7 @@ def main():
     print('steps', args.num_steps)
     rollouts = RolloutStorage(args.num_steps, args.num_processes,
                               obsspace.shape, 
-                              actor_critic.recurrent_hidden_state_size, args.num_prototypes)
+                              actor_critic.recurrent_hidden_state_size)
     rollouts.to(device)
     obs = envs.reset()
     rollouts.obs[0].copy_(torch.transpose(obs, 3, 1))

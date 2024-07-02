@@ -8,7 +8,7 @@ def _flatten_helper(T, N, _tensor):
 
 class RolloutStorage(object):
     def __init__(self, num_steps, num_processes, obs_shape, 
-                 recurrent_hidden_state_size, head):
+                 recurrent_hidden_state_size):
         '''
         Standard storage for A2C/PPO algorithms.
         '''
@@ -38,10 +38,6 @@ class RolloutStorage(object):
         self.step = 0
 
         self.recurrent_hidden_state_size = recurrent_hidden_state_size
-        self.heads = head
-        self.success = 16
-        self.successTake = 16
-        self.hidden_state_size = 256
 
 
     def contrastvalueReward(self, contrastval):
