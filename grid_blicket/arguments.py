@@ -89,8 +89,8 @@ def get_args():
     parser.add_argument(
         '--save-interval',
         type=int,
-        default=100,
-        help='save interval, one save per n updates (default: 100)')
+        default=1000,
+        help='save interval, one save per n updates (default: 1000)')
     parser.add_argument(
         '--eval-interval',
         type=int,
@@ -157,6 +157,11 @@ def get_args():
         type=float,
         default=0.2,
         help='lambda for intrinsic reward from ConSpec')
+    parser.add_argument(
+        '--save_checkpoint',
+        action='store_true',
+        default=False,
+        help='save checkpoint after training')
     
     args = parser.parse_args()
 

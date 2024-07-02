@@ -27,10 +27,11 @@ def main():
     torch.cuda.manual_seed_all(args.seed)
 
     # create folder for checkpoints
-    base_directory = "/network/scratch/l/lindongy/grid_blickets/conspec_ckpt"
-    subfolder_name = f"{args.env_name}-conspec-rec-PO-lr{args.lr}-seed{args.seed}"
-    full_path = os.path.join(base_directory, subfolder_name)
-    os.makedirs(full_path, exist_ok=True)
+    if args.save_checkpoint:
+        base_directory = "/network/scratch/l/lindongy/grid_blickets/conspec_ckpt"
+        subfolder_name = f"{args.env_name}-conspec-rec-PO-lr{args.lr}-seed{args.seed}"
+        full_path = os.path.join(base_directory, subfolder_name)
+        os.makedirs(full_path, exist_ok=True)
 
     if args.cuda and torch.cuda.is_available() and args.cuda_deterministic:
         torch.backends.cudnn.benchmark = False
@@ -45,8 +46,11 @@ def main():
     device = torch.device("cuda:0" if args.cuda else "cpu")
 
     envs, max_steps = make_minigrid_envs(
-        num_envs=args.num_processes, env_name=args.env_name, seeds=[(args.seed + i) for i in range(args.num_processes)], device=device
-    )
+        num_envs=args.num_processes,
+        env_name=args.env_name,
+        seeds=[(args.seed + i) for i in range(args.num_processes)],
+        device=device
+        )
     args.num_steps = max_steps
     obsspace = envs.observation_space
     actionspace = envs.action_space
@@ -100,7 +104,7 @@ def main():
     print('steps', args.num_steps)
     rollouts = RolloutStorage(args.num_steps, args.num_processes,
                               obsspace.shape, 
-                              actor_critic.recurrent_hidden_state_size, args.num_prototypes)
+                              actor_critic.recurrent_hidden_state_size)
     rollouts.to(device)
     obs = envs.reset()
     rollouts.obs[0].copy_(torch.transpose(obs, 3, 1))
@@ -210,61 +214,62 @@ def main():
             })
         
         # save checkpoint
-        if (j % args.save_interval == 0 and int_rewards_ema > 0) or (j == num_updates - 1 and int_rewards_ema > 0):
-            buffer = {
-                'obs': rollouts.obs,
-                'rewards': rollouts.rewards,
-                'hidden_states': rollouts.recurrent_hidden_states,
-                'actions': rollouts.actions,
-                'masks': rollouts.masks,
-                'bad_masks': rollouts.bad_masks,
-                'value_preds': rollouts.value_preds,
-            }
-            sf_buffer = conspecfunction.rollouts.retrieve_SFbuffer()
-            conspec_rollouts = {
-                'obs': sf_buffer[0],
-                'rewards': sf_buffer[5],
-                'hidden_states': sf_buffer[1],
-                'actions': sf_buffer[3],
-                'masks': sf_buffer[2],
-                'bad_masks': sf_buffer[2],
-                'value_preds': sf_buffer[4],
-            }
-            tensor_proto_list = [p.data for p in conspecfunction.prototypes.prototypes]
-            model_checkpoint = {
-                'epoch': j,
-                'encoder_state_dict': conspecfunction.encoder.state_dict(),
-                'actor_critic_state_dict': actor_critic.state_dict(),
-                'optimizer_conspec_state_dict': conspecfunction.optimizerConSpec.state_dict(),
-                'optimizer_ppo_state_dict': agent.optimizer.state_dict(),
-                'prototypes_state_dict': tensor_proto_list,
-                'prototypes': conspecfunction.prototypes.prototypes.state_dict(),
+        if args.save_checkpoint:
+            if (j % args.save_interval == 0 and int_rewards_ema > 0) or (j == num_updates - 1 and int_rewards_ema > 0):
+                buffer = {
+                    'obs': rollouts.obs,
+                    'rewards': rollouts.rewards,
+                    'hidden_states': rollouts.recurrent_hidden_states,
+                    'actions': rollouts.actions,
+                    'masks': rollouts.masks,
+                    'bad_masks': rollouts.bad_masks,
+                    'value_preds': rollouts.value_preds,
                 }
-            cos_checkpoint = {
-                'cos_max_scores' : conspecfunction.rollouts.cos_max_scores, 
-                'max_indices' : conspecfunction.rollouts.max_indx,
-                'cos_scores' : conspecfunction.rollouts.cos_scores,
-                # 'cos_success' : conspecfunction.rollouts.cos_score_pos,
-                # 'cos_failure' : conspecfunction.rollouts.cos_score_neg,
-            }
-                    
-            print(f'saving checkpoints for epoch {j}...')
-            checkpoint_path = os.path.join(full_path, f'model_checkpoint_epoch_{j}.pth')
-            buffer_path = os.path.join(full_path, f'buffer_epoch_{j}.pth')
-            conspec_rollouts_path = os.path.join(full_path, f'conspec_rollouts_epoch_{j}.pth')
-            cos_path = os.path.join(full_path, f'cos_sim_epoch_{j}.pth')
+                sf_buffer = conspecfunction.rollouts.retrieve_SFbuffer()
+                conspec_rollouts = {
+                    'obs': sf_buffer[0],
+                    'rewards': sf_buffer[5],
+                    'hidden_states': sf_buffer[1],
+                    'actions': sf_buffer[3],
+                    'masks': sf_buffer[2],
+                    'bad_masks': sf_buffer[2],
+                    'value_preds': sf_buffer[4],
+                }
+                tensor_proto_list = [p.data for p in conspecfunction.prototypes.prototypes]
+                model_checkpoint = {
+                    'epoch': j,
+                    'encoder_state_dict': conspecfunction.encoder.state_dict(),
+                    'actor_critic_state_dict': actor_critic.state_dict(),
+                    'optimizer_conspec_state_dict': conspecfunction.optimizerConSpec.state_dict(),
+                    'optimizer_ppo_state_dict': agent.optimizer.state_dict(),
+                    'prototypes_state_dict': tensor_proto_list,
+                    'prototypes': conspecfunction.prototypes.prototypes.state_dict(),
+                    }
+                cos_checkpoint = {
+                    'cos_max_scores' : conspecfunction.rollouts.cos_max_scores, 
+                    'max_indices' : conspecfunction.rollouts.max_indx,
+                    'cos_scores' : conspecfunction.rollouts.cos_scores,
+                    # 'cos_success' : conspecfunction.rollouts.cos_score_pos,
+                    # 'cos_failure' : conspecfunction.rollouts.cos_score_neg,
+                }
+                        
+                print(f'saving checkpoints for epoch {j}...')
+                checkpoint_path = os.path.join(full_path, f'model_checkpoint_epoch_{j}.pth')
+                buffer_path = os.path.join(full_path, f'buffer_epoch_{j}.pth')
+                conspec_rollouts_path = os.path.join(full_path, f'conspec_rollouts_epoch_{j}.pth')
+                cos_path = os.path.join(full_path, f'cos_sim_epoch_{j}.pth')
 
-            torch.save(model_checkpoint, checkpoint_path)
-            print('model checkpoint saved')
+                torch.save(model_checkpoint, checkpoint_path)
+                print('model checkpoint saved')
 
-            torch.save(buffer, buffer_path)
-            print('buffer saved')
+                torch.save(buffer, buffer_path)
+                print('buffer saved')
 
-            torch.save(conspec_rollouts, conspec_rollouts_path)
-            print('success/failure buffers saved')
+                torch.save(conspec_rollouts, conspec_rollouts_path)
+                print('success/failure buffers saved')
 
-            torch.save(cos_checkpoint, cos_path)
-            print('cosine similarity saved')
+                torch.save(cos_checkpoint, cos_path)
+                print('cosine similarity saved')
 
     wandb.finish()
 
