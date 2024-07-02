@@ -45,16 +45,19 @@ def get_env_max_steps(env_name):
         raise ValueError(f"Unknown MiniGrid-based environment {env_name}")
     
 class VecMinigrid(SeededSubprocVecEnv):
-    def __init__(self, num_envs, env_name, seeds):
+    def __init__(self, num_envs, env_name, seeds, goal_pos=None):
         if seeds is None:
             seeds = [int.from_bytes(os.urandom(4), byteorder="little") for _ in range(num_envs)]
-        env_fn = [partial(self._make_minigrid_env, env_name, seed) for seed in seeds]
+        env_fn = [partial(self._make_minigrid_env, env_name, seed, goal_pos) for seed in seeds]
         super().__init__(env_fn)
 
     @staticmethod
-    def _make_minigrid_env(env_name, seed):
+    def _make_minigrid_env(env_name, seed, goal_pos=None):
         if env_name.startswith("MiniGrid"):
-            env = gym.make(env_name)
+            if env_name == "MiniGrid-FourRooms-v0" and goal_pos is not None:
+                env = gym.make(env_name, goal_pos=goal_pos)
+            else:
+                env = gym.make(env_name)
         elif env_name.startswith("MultiDoorKeyEnv"):  # eg. MultiDoorKeyEnv-8x8-3keys-v0
             _, size, n_keys, _ = env_name.split('-') # ['MultiDoorKeyEnv', '8x8', '3keys', 'v0']
             size = int(size.split('x')[0])
@@ -90,9 +93,9 @@ class VecPyTorchMinigrid(VecEnvWrapper):
         reward = torch.from_numpy(reward).unsqueeze(dim=1).float()
         return obs, reward, done, info
 
-def make_minigrid_envs(num_envs, env_name, seeds, device, **kwargs):
+def make_minigrid_envs(num_envs, env_name, seeds, device, goal_pos=None, **kwargs):
     ret_normalization = not kwargs.get('no_ret_normalization', False)
-    venv = VecMinigrid(num_envs, env_name, seeds)
+    venv = VecMinigrid(num_envs, env_name, seeds, goal_pos)
     venv = VecMonitor(venv=venv, filename=None)
     venv = VecNormalize(venv=venv, norm_obs=False, norm_reward=ret_normalization)
     envs = VecPyTorchMinigrid(venv, device)
