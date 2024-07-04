@@ -8,6 +8,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import sys
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir)
+grid_blicket_path = '/home/mila/l/lindongy/causal_rl/grid_blicket'
+if grid_blicket_path in sys.path:
+    sys.path.remove(grid_blicket_path)
 
 from a2c_ppo_acktr import algo, utils
 from a2c_ppo_acktr.envs import make_minigrid_envs
@@ -16,7 +23,6 @@ from a2c_ppo_acktr.storage import RolloutStorage  # taken from ConSpec repo's a2
 from arguments import get_args
 from Conspec.ConSpec import ConSpec
 import datetime
-import sys
 import wandb
 
 # @profile
@@ -57,9 +63,16 @@ def main():
     print('obsspace.shape', obsspace.shape)
     print('actionspace', actionspace)
     print('use_recurrent_policy', args.recurrent_policy)
+
+    hypothesis = torch.zeros(1, args.num_prototypes).to(device)
+    hypothesis[0, 0::2] = 1
+    print('hypothesis', hypothesis)
+    hypothesis_batch = hypothesis.repeat(args.num_processes, 1)
+
     actor_critic = Policy(
         obsspace.shape,
         actionspace,
+        args.num_prototypes, 
         base_kwargs={'recurrent': args.recurrent_policy,
                      'observation_space': obsspace})
     actor_critic.to(device)
@@ -132,7 +145,7 @@ def main():
             # Sample actions
             with torch.no_grad():
                 value, action, action_log_prob, recurrent_hidden_states = actor_critic.act(
-                    rollouts.obs[step], rollouts.recurrent_hidden_states[step],
+                    rollouts.obs[step], hypothesis_batch, rollouts.recurrent_hidden_states[step],
                     rollouts.masks[step])
 
             # Obser reward and next obs
@@ -160,7 +173,7 @@ def main():
 
         with torch.no_grad():
             next_value = actor_critic.get_value(
-                rollouts.obs[-1], rollouts.recurrent_hidden_states[-1],
+                rollouts.obs[-1], hypothesis_batch, rollouts.recurrent_hidden_states[-1],
                 rollouts.masks[-1]).detach()
             # now compute new rewards
             rewardstotal = rollouts.retrieveR()  # gets extrinsic reward, i.e. rollouts.rewards  # torch.Size([ep_length, num_processes, 1])
@@ -175,15 +188,16 @@ def main():
         '''
         obstotal, rewardtotal, recurrent_hidden_statestotal, actiontotal,  maskstotal  = rollouts.release()
 
-        reward_intrinsic_extrinsic  = conspecfunction.do_everything(obstotal, recurrent_hidden_statestotal, actiontotal, rewardtotal, maskstotal)
+        reward_intrinsic_extrinsic, reward_intrinsic  = conspecfunction.do_everything(obstotal, recurrent_hidden_statestotal, actiontotal, rewardtotal, maskstotal, hypothesis_batch)
         ext_int_rewards.append(reward_intrinsic_extrinsic.sum(0).mean().cpu().detach().numpy())  # sum over time, mean over processes
-        rollouts.storereward(reward_intrinsic_extrinsic)  # update rollouts.rewards to be reward_intrinsic_extrinsic, i.e. the sum of intrinsic and extrinsic rewards
+        # rollouts.storereward(reward_intrinsic_extrinsic)  # update rollouts.rewards to be reward_intrinsic_extrinsic, i.e. the sum of intrinsic and extrinsic rewards
+        rollouts.storereward(reward_intrinsic.unsqueeze(-1))  # update rollouts.rewards to be reward_intrinsic, i.e. the sum of intrinsic and extrinsic rewards
         ##############################################################
         
         rollouts.compute_returns(next_value, args.use_gae, args.gamma,
                                  args.gae_lambda, args.use_proper_time_limits)  # compute returns using updated rewards (intrinsic+extrinsic)
 
-        value_loss, action_loss, dist_entropy = agent.update(rollouts)  # update actor_critic based on returns and value_preds
+        value_loss, action_loss, dist_entropy = agent.update(rollouts, hypothesis_batch)  # update actor_critic based on returns and value_preds
 
         rollouts.after_update()  # last step becomes first step of next rollout
 
@@ -193,8 +207,8 @@ def main():
             end = time.time()
             # calculate moving average of ext_rewards and ext_int_rewards to calculate the moving average of intrinsic rewards
             int_rewards_ema = np.mean(ext_int_rewards[-args.num_processes*args.log_interval:]) - np.mean(ext_rewards[-args.num_processes*args.log_interval:])
-            # print(f"Updates {j}, num timesteps {total_num_steps}, FPS {int(total_num_steps / (end - start))}")
-            # print(f'Moving average for external rewards: {np.mean(episode_rewards):.5f}, for episode length {np.mean(episode_lengths):.5f}, for intrinsic rewards: {int_rewards_ema:.1f}')
+            print(f"Updates {j}, num timesteps {total_num_steps}, FPS {int(total_num_steps / (end - start))}")
+            print(f'Moving average for external rewards: {np.mean(episode_rewards):.5f}, for episode length {np.mean(episode_lengths):.5f}, for intrinsic rewards: {int_rewards_ema:.1f}')
             wandb.log({
                 'Epoch': j,
                 'total_num_steps': total_num_steps,

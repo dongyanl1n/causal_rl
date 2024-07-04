@@ -43,6 +43,7 @@ class ConSpec(nn.Module):
                      'observation_space': obsspace})  # envs.observation_space.shape,
         self.encoder.to(device)
         self.intrinsicR_scale = args.intrinsicR_scale
+        self.gamma = args.gamma
         self.num_procs = args.num_processes
         self.num_prototypes = args.num_prototypes
         self.seed = args.seed
@@ -78,7 +79,7 @@ class ConSpec(nn.Module):
         hidden = hidden.view(*obs_batchorig.size()[:2], -1)  # shape: torch.Size([ep_length, num_processes, 512])
         return self.prototypes(hidden, prototype_number)
 
-    def calc_intrinsic_reward(self):
+    def calc_intrinsic_reward(self, hypothesis_batch):
         '''computes the intrinsic reward for the current minibatch of trajectories'''
         prototypes_used, count_prototypes_timesteps_criterion = self.rollouts.retrieve_prototypes_used()  # [0,0,0,0,0,0,0,0]
         prototypes_used = prototypes_used.to(device=self.device)
@@ -113,10 +114,40 @@ class ConSpec(nn.Module):
                 zero_sum += temp
             intrinsic_reward -= zero_sum
             intrinsic_reward[intrinsic_reward < 0.] = 0.
+            intrinsic_reward = intrinsic_reward * hypothesis_batch.unsqueeze(0)  # apply hypothesis mask: num_processes, num_prototypes
             intrinsic_reward = intrinsic_reward.sum(2)
             '''compute the total reward = intrinsic reward + environment reward'''
-            return self.rollouts.calc_total_reward(intrinsic_reward)
+            return self.rollouts.calc_total_reward(intrinsic_reward), intrinsic_reward  # adds the intrinsic reward to the environment reward
 
+    def calc_intrinsic_reward_eq3(self, hypothesis_batch):
+        '''computes the intrinsic reward using equation 3 of the paper'''
+        prototypes_used = self.rollouts.retrieve_prototypes_used()[0].to(device=self.device)
+        with torch.no_grad():
+            obs_batch, recurrent_hidden_states_batch, masks_batch, actions_batch, obs_batchorig, _ = self.rollouts.retrieve_batch()
+            _, _, _, cos_scores, _ = self.calc_cos_scores(obs_batch, recurrent_hidden_states_batch, masks_batch, actions_batch, obs_batchorig, -1)
+            cos_scores = cos_scores.view(*obs_batchorig.size()[:2], -1)
+            prototypes_used = torch.tile(torch.reshape(prototypes_used, (1, 1, -1)), (*cos_scores.shape[:2], 1)) # repeat prototype vector for ep_length times
+
+            # Apply the discount factor gamma and aalculate the difference between current and previous cosine scores
+            discounted_diff = self.gamma * cos_scores - torch.roll(cos_scores, shifts=1, dims=0)
+            discounted_diff[0] = cos_scores[0]  # Set the first row to the initial scores
+
+            discounted_diff = discounted_diff * prototypes_used  # Apply the prototypes used mask  # shape: torch.Size([ep_length, num_processes, num_prototypes])
+            
+            discounted_diff = discounted_diff * hypothesis_batch.unsqueeze(0) # apply hypothesis mask: num_processes, num_prototypes
+
+            # Sum over all prototypes (H in the equation)
+            summed_diff = discounted_diff.sum(dim=-1)
+            
+            # Apply the proportionality constant lambda (intrinsicR_scale)
+            intrinsic_reward = self.intrinsicR_scale * summed_diff
+            
+            # Ensure non-negative rewards
+            intrinsic_reward = torch.clamp(intrinsic_reward, min=0.0)
+            
+            '''compute the total reward = intrinsic reward + environment reward'''
+            return self.rollouts.calc_total_reward(intrinsic_reward), intrinsic_reward  # adds the intrinsic reward to the environment reward
+    
     def update_conspec(self):
         '''trains the ConSpec module'''
         prototypes_used, count_prototypes_timesteps_criterion = self.rollouts.retrieve_prototypes_used()
@@ -148,24 +179,25 @@ class ConSpec(nn.Module):
 
             for i in range(self.num_prototypes):
                 if (cos_scores_pos[i] - cos_scores_neg[i] > 0.6) and cos_scores_pos[i] > 0.6:
-                    count_prototypes_timesteps_criterion[i] += 1
+                    count_prototypes_timesteps_criterion[i] += 1  # stop updating the prototype if the criterion is met
                 else:
-                    count_prototypes_timesteps_criterion[i] = 0
+                    count_prototypes_timesteps_criterion[i] = 0 # reset the counter if the criterion is not met
                 if count_prototypes_timesteps_criterion[i] > 25 and prototypes_used[i] < 0.1:
                     prototypes_used[i] = 1.
                     self.rollouts.store_frozen_SF(i)
 
             self.optimizerConSpec.zero_grad()
-            costCL.backward()
+            costCL.backward()  # learn encoder and prototypes
             self.optimizerConSpec.step()
         self.rollouts.store_prototypes_used(prototypes_used, count_prototypes_timesteps_criterion)
         torch.cuda.empty_cache()
 
-    def do_everything(self, obstotal,  recurrent_hidden_statestotal, actiontotal,rewardtotal, maskstotal):
+    def do_everything(self, obstotal,  recurrent_hidden_statestotal, actiontotal,rewardtotal, maskstotal, hypothesis_batch):
         '''function for doing all the required conspec functions above, in order'''
-        self.store_memories(obstotal, recurrent_hidden_statestotal, actiontotal, rewardtotal, maskstotal)  # store in main buffer and pos/neg buffer
-        rewardtotal_intrisic_extrinsic = self.calc_intrinsic_reward()
+        self.store_memories(obstotal, recurrent_hidden_statestotal, actiontotal, rewardtotal, maskstotal)  # store in main buffer and pos/neg buffer  # ep_length, num_processes, *
+        # rewardtotal_intrisic_extrinsic, reward_intrinsic = self.calc_intrinsic_reward(hypothesis_batch)
+        rewardtotal_intrisic_extrinsic, reward_intrinsic = self.calc_intrinsic_reward_eq3(hypothesis_batch)
         self.update_conspec()
-        return rewardtotal_intrisic_extrinsic
+        return rewardtotal_intrisic_extrinsic, reward_intrinsic
     
 
