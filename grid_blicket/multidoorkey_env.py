@@ -81,6 +81,13 @@ class MultiDoorKeyEnv(MiniGridEnv):
 
         self.mission = "use the key to open the door and then get to the goal"
 
+    def _reward(self):
+        # Reward is 10 if reaches goal, step penalty -0.01
+        if self.agent_pos == (self.grid.width - 2, self.grid.height - 2) and all(self.door_states):
+            return 10.0  # High reward for reaching the goal after opening all doors
+        else:
+            return -0.01  # Small negative reward (step penalty) for each action
+
     def reset(self, **kwargs):
         obs, info = MiniGridEnv.reset(self, **kwargs)
         self.door_states = [False] * self.n_keys
@@ -88,7 +95,7 @@ class MultiDoorKeyEnv(MiniGridEnv):
 
     def step(self, action):
         self.step_count += 1
-        reward = 0
+        reward = self._reward()
         terminated = False
         truncated = False
         # Execute the action
