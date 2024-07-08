@@ -15,13 +15,17 @@ class MultiDoorKeyEnv(MiniGridEnv):
                 agent_start_dir=0,
                 n_keys=1,
                 max_steps: int = None,
+                fixed_positions=False,  # If True, the key and door positions are fixed during env.reset()
                 **kwargs,
-            ):
+                ):        
             self.agent_start_pos = agent_start_pos
             self.agent_start_dir = agent_start_dir
             self.n_keys = n_keys
             self.size = size
             self.door_states = [False] * n_keys
+            self.fixed_positions = fixed_positions
+            self.key_positions = None
+            self.door_positions = None
 
             if max_steps is None:
                 max_steps = (n_keys+1) * 4 * size**2
@@ -31,7 +35,6 @@ class MultiDoorKeyEnv(MiniGridEnv):
             super().__init__(
                 mission_space=mission_space,
                 grid_size=size,
-                # Set this to True for maximum speed
                 see_through_walls=True,
                 max_steps=max_steps,
                 **kwargs,
@@ -53,30 +56,31 @@ class MultiDoorKeyEnv(MiniGridEnv):
         self.put_obj(Goal(), width - 2, height - 2)
 
         # Place the agent
-        if self.agent_start_pos is not None:  # specify the agent start position
+        if self.agent_start_pos is not None:
             self.agent_pos = self.agent_start_pos
             self.agent_dir = self.agent_start_dir
-        else:  # randomize the agent start position
+        else:
             self.agent_pos = self.place_agent()
 
         # List of all possible positions except the outer walls
         all_positions = [(x, y) for x in range(1, width - 1) for y in range(1, height - 1)]
-        random.shuffle(all_positions)
-
-        # Ensure agent start position is not in the list
         all_positions.remove(self.agent_pos)
-
-        # Ensure goal position is not in the list
         all_positions.remove((width - 2, height - 2))
 
-        # Randomly place the keys
-        key_positions = [all_positions.pop() for _ in range(self.n_keys)]
-        for i, pos in enumerate(key_positions):
+        if not self.fixed_positions or (self.key_positions is None and self.door_positions is None):
+            random.shuffle(all_positions)
+            
+            # Randomly place the keys
+            self.key_positions = [all_positions.pop() for _ in range(self.n_keys)]
+            
+            # Randomly place the corresponding doors
+            self.door_positions = [all_positions.pop() for _ in range(self.n_keys)]
+
+        # Place keys and doors
+        for i, pos in enumerate(self.key_positions):
             self.grid.set(pos[0], pos[1], Key(COLOR_NAMES[i]))
 
-        # Randomly place the corresponding doors
-        door_positions = [all_positions.pop() for _ in range(self.n_keys)]
-        for i, pos in enumerate(door_positions):
+        for i, pos in enumerate(self.door_positions):
             self.grid.set(pos[0], pos[1], Door(COLOR_NAMES[i], is_locked=True))
 
         self.mission = "use the key to open the door and then get to the goal"
@@ -88,10 +92,17 @@ class MultiDoorKeyEnv(MiniGridEnv):
         else:
             return -0.01  # Small negative reward (step penalty) for each action
 
-    def reset(self, **kwargs):
-        obs, info = MiniGridEnv.reset(self, **kwargs)
+    def reset(self, *, seed=None, options=None, fixed_positions=None):
+        if fixed_positions is not None:
+            self.fixed_positions = fixed_positions
+        
+        if not self.fixed_positions:
+            self.key_positions = None
+            self.door_positions = None
+
         self.door_states = [False] * self.n_keys
-        return obs, info
+        
+        return super().reset(seed=seed, options=options)
 
     def step(self, action):
         self.step_count += 1
@@ -187,8 +198,7 @@ def visualize_episode(env, max_steps=100):
 
 def main():
     # Create the environment
-    env = MultiDoorKeyEnv(render_mode='rgb_array')
-
+    env = MultiDoorKeyEnv(render_mode='rgb_array', fixed_positions=True)
     # Visualize an episode with a random agent
     visualize_episode(env)
 
