@@ -15,66 +15,47 @@ sys.path.insert(0, '/home/mila/l/lindongy/causal_rl/grid_blicket')
 from multidoorkey_env import MultiDoorKeyEnv
 
 ############### code taken from prioritized level replay but adapted to SB3 ###############
-class SeededSubprocVecEnv(SubprocVecEnv):
-    def __init__(self, env_fns):
-        super().__init__(env_fns)
-
-    def seed_async(self, seed, index):
-        self.remotes[index].send(('seed', seed))
-        self.waiting = True
-
-    def seed_wait(self, index):
-        obs = self.remotes[index].recv()
-        self.waiting = False
-        return obs
-
-    def seed(self, seed, index):
-        self.seed_async(seed, index)
-        return self.seed_wait(index)
-
+# Assuming MultiDoorKeyEnv is defined elsewhere
+# from your_module import MultiDoorKeyEnv
 
 def get_env_max_steps(env_name):
     if env_name.startswith("MiniGrid"):
         return gym.make(env_name).max_steps
-    elif env_name.startswith("MultiDoorKeyEnv"):  # eg. MultiDoorKeyEnv-8x8-3keys-v0
-        _, size, n_keys, _ = env_name.split('-') # ['MultiDoorKeyEnv', '8x8', '3keys', 'v0']
+    elif env_name.startswith("MultiDoorKeyEnv"):
+        _, size, n_keys, _ = env_name.split('-')
         size = int(size.split('x')[0])
         n_keys = int(n_keys.split('keys')[0])
         return MultiDoorKeyEnv(n_keys=n_keys, size=size).max_steps
     else:
         raise ValueError(f"Unknown MiniGrid-based environment {env_name}")
-    
-class VecMinigrid(SeededSubprocVecEnv):
-    def __init__(self, num_envs, env_name, seeds, goal_pos=None):
-        if seeds is None:
-            seeds = [int.from_bytes(os.urandom(4), byteorder="little") for _ in range(num_envs)]
-        env_fn = [partial(self._make_minigrid_env, env_name, seed, goal_pos) for seed in seeds]
+
+class VecMinigrid(SubprocVecEnv):
+    def __init__(self, num_envs, env_name, goal_pos=None, fixed_positions=True):
+        env_fn = [partial(self._make_minigrid_env, env_name, goal_pos, fixed_positions) for _ in range(num_envs)]
         super().__init__(env_fn)
 
     @staticmethod
-    def _make_minigrid_env(env_name, seed, goal_pos=None):
+    def _make_minigrid_env(env_name, goal_pos=None, fixed_positions=True):
         if env_name.startswith("MiniGrid"):
             if env_name == "MiniGrid-FourRooms-v0" and goal_pos is not None:
                 env = gym.make(env_name, goal_pos=goal_pos)
             else:
                 env = gym.make(env_name)
-        elif env_name.startswith("MultiDoorKeyEnv"):  # eg. MultiDoorKeyEnv-8x8-3keys-v0
-            _, size, n_keys, _ = env_name.split('-') # ['MultiDoorKeyEnv', '8x8', '3keys', 'v0']
+        elif env_name.startswith("MultiDoorKeyEnv"):
+            _, size, n_keys, _ = env_name.split('-')
             size = int(size.split('x')[0])
             n_keys = int(n_keys.split('keys')[0])
-            env = MultiDoorKeyEnv(n_keys=n_keys, size=size)
+            env = MultiDoorKeyEnv(n_keys=n_keys, size=size, fixed_positions=fixed_positions)
         else:
             raise ValueError(f"Unknown MiniGrid-based environment {env_name}")
 
-        env.reset(seed=seed)
         env = ImgObsWrapper(env)
         return env
 
 class VecPyTorchMinigrid(VecEnvWrapper):
-    def __init__(self, venv, device, level_sampler=None):
+    def __init__(self, venv, device):
         super().__init__(venv)
         self.device = device
-        self.level_sampler = level_sampler
         m, n, c = venv.observation_space.shape
         self.observation_space = Box(low=0, high=255, shape=(c, m, n), dtype=np.uint8)
 
@@ -93,9 +74,9 @@ class VecPyTorchMinigrid(VecEnvWrapper):
         reward = torch.from_numpy(reward).unsqueeze(dim=1).float()
         return obs, reward, done, info
 
-def make_minigrid_envs(num_envs, env_name, seeds, device, goal_pos=None, **kwargs):
+def make_minigrid_envs(num_envs, env_name, device, goal_pos=None, fixed_positions=True, **kwargs):
     ret_normalization = not kwargs.get('no_ret_normalization', False)
-    venv = VecMinigrid(num_envs, env_name, seeds, goal_pos)
+    venv = VecMinigrid(num_envs, env_name, goal_pos, fixed_positions)
     venv = VecMonitor(venv=venv, filename=None)
     venv = VecNormalize(venv=venv, norm_obs=False, norm_reward=ret_normalization)
     envs = VecPyTorchMinigrid(venv, device)
