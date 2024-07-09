@@ -1,0 +1,24 @@
+program: main.py
+method: random
+metric:
+  name: mean_reward
+  goal: maximize
+parameters:
+  lr:
+    distribution: log_uniform_values
+    min: 1e-4
+    max: 1e-3
+  intrinsicR_scale:
+    distribution: log_uniform_values
+    min: 0.2
+    max: 0.5
+  lrConSpec:
+    distribution: log_uniform_values
+    min: 1e-3
+    max: 1e-2
+  entropy_coef:
+    distribution: uniform
+    min: 0.02
+    max: 0.05
+  num_mini_batch:
+    values: [4, 8]

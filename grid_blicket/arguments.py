@@ -37,8 +37,8 @@ def get_args():
     parser.add_argument(
         '--entropy-coef',
         type=float,
-        default=0.01,
-        help='entropy term coefficient (default: 0.01)')
+        default=0.02,
+        help='entropy term coefficient (default: 0.02)')
     parser.add_argument(
         '--value-loss-coef',
         type=float,
@@ -60,12 +60,12 @@ def get_args():
         '--num-processes',
         type=int,
         default=8,
-        help='how many training CPU processes to use')
+        help='how many training CPU processes to use, must be greater than num-mini-batch (default: 8)')
     parser.add_argument(
         '--num-steps',
         type=int,
         default=5,
-        help='number of forward steps in A2C (default: 5)')
+        help='number of steps in each rollout (default: 5)')
     parser.add_argument(
         '--ppo-epoch',
         type=int,
@@ -75,7 +75,7 @@ def get_args():
         '--num-mini-batch',
         type=int,
         default=4,
-        help='number of batches for ppo (default: 4)')
+        help='number of batches for ppo (default: 4), must be smaller or equal to num_processes')
     parser.add_argument(
         '--clip-param',
         type=float,
@@ -92,23 +92,10 @@ def get_args():
         default=1000,
         help='save interval, one save per n updates (default: 1000)')
     parser.add_argument(
-        '--eval-interval',
+        '--num-epochs',
         type=int,
-        default=None,
-        help='eval interval, one eval per n updates (default: None)')
-    parser.add_argument(
-        '--num-env-steps',
-        type=int,
-        default=10e6,
-        help='number of environment steps to train (default: 10e6)')
-    parser.add_argument(
-        '--log-dir',
-        default='/network/scratch/l/lindongy/grid_blickets/logs',
-        help='directory to save agent logs')
-    parser.add_argument(
-        '--save-dir',
-        default='./trained_models/',
-        help='directory to save agent logs (default: ./trained_models/)')
+        default=10000,
+        help='number of epochs/updates to train (default: 1e5)')
     parser.add_argument(
         '--no-cuda',
         action='store_true',
@@ -122,7 +109,7 @@ def get_args():
     parser.add_argument(
         '--recurrent-policy',
         action='store_true',
-        default=False,
+        default=True,
         help='use a recurrent policy')
     parser.add_argument(
         '--use-linear-lr-decay',
@@ -135,8 +122,13 @@ def get_args():
     ####################################
     parser.add_argument(
         '--env-name',
-        default='MultiDoorKeyEnv-8x8-3keys-v0',
-        help='environment to train on (default: MultiDoorKeyEnv-8x8-3keys-v0)')
+        default='MultiDoorKeyEnv-8x8-2keys-v0',
+        help='environment to train on (default: MultiDoorKeyEnv-8x8-2keys-v0)')
+    parser.add_argument(
+        '--fixed_positions', 
+        default=False,
+        action='store_true',
+        help='Whether to keep key and door positions fixed across resets')
 
 
     ####################################
@@ -162,6 +154,32 @@ def get_args():
         action='store_true',
         default=False,
         help='save checkpoint after training')
+    parser.add_argument(
+        '--SF_buffer_size',
+        type=int,
+        default=16,
+        help='size of the success and failure memory buffers')
+    parser.add_argument(
+        '--freeze_prototype_steps',
+        type=int,
+        default=25,
+        help='gradient step criterion for freeze prototype')
+    parser.add_argument(
+        '--cos_score_threshold',
+        type=float,
+        default=0.6,
+        help='cosine similarity threshold for ConSpec')
+    parser.add_argument(
+        '--roundhalf',
+        type=int,
+        default=3,
+        help='window size for rolling average')
+    parser.add_argument(
+        '--loss_ortho_scale',
+        type=float,
+        default=0.2,
+        help='scale for loss_ortho in loss_conspec')
+    
     
     args = parser.parse_args()
 

@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-
+import random
 from a2c_ppo_acktr import algo, utils
 from a2c_ppo_acktr.envs import make_minigrid_envs
 from a2c_ppo_acktr.model import Policy  # taken from ConSpec repo's a2c_ppo_acktr/modelRL.py
@@ -25,11 +25,40 @@ def main():
 
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
+
+    #========================= for wandb sweep ==============================
+    # Initialize wandb first
+    # wandb.init(project="grid_blicket_env", 
+    #     entity="dongyanl1n",
+    #     dir="/network/scratch/l/lindongy/grid_blickets",
+    #     config=args.__dict__)  # Pass all arguments as initial config
+
+    # # Now update args with wandb.config values
+    # args.lr = wandb.config.lr
+    # args.intrinsicR_scale = wandb.config.intrinsicR_scale
+    # args.lrConSpec = wandb.config.lrConSpec
+    # args.entropy_coef = wandb.config.entropy_coef
+    # args.num_mini_batch = wandb.config.num_mini_batch
+
+    # # Update wandb run name after getting the final config values
+    # wandb.run.name = f"{args.env_name}-conspec-rec-PO-lr{args.lr}-seed{args.seed}"
+    # wandb.run.save()
+    #========================================================================
+
+    #========================= for single wandb job ==============================
+    wandb.init(project="grid_blicket_env", 
+            entity="dongyanl1n", 
+            name=f"{args.env_name}-conspec-rec-PO-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-num_mini_batch{args.num_mini_batch}-seed{args.seed}",
+            dir=os.environ.get('SLURM_TMPDIR', '/network/scratch/l/lindongy/grid_blickets'),
+            config=args)
+    #========================================================================
 
     # create folder for checkpoints
     if args.save_checkpoint:
         base_directory = "/network/scratch/l/lindongy/grid_blickets/conspec_ckpt"
-        subfolder_name = f"{args.env_name}-conspec-rec-PO-lr{args.lr}-seed{args.seed}"
+        subfolder_name = f"{args.env_name}-conspec-rec-PO-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-num_mini_batch{args.num_mini_batch}-seed{args.seed}"
         full_path = os.path.join(base_directory, subfolder_name)
         os.makedirs(full_path, exist_ok=True)
 
@@ -37,19 +66,15 @@ def main():
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
 
-    log_dir = os.path.expanduser(args.log_dir)
-    eval_log_dir = log_dir + "_eval"
-    utils.cleanup_log_dir(log_dir)
-    utils.cleanup_log_dir(eval_log_dir)
-    
     torch.set_num_threads(1)
     device = torch.device("cuda:0" if args.cuda else "cpu")
 
     envs, max_steps = make_minigrid_envs(
         num_envs=args.num_processes,
         env_name=args.env_name,
-        seeds=[(args.seed + i) for i in range(args.num_processes)],
-        device=device
+        device=device,
+        fixed_positions=args.fixed_positions,
+        no_ret_normalization=True
         )
     args.num_steps = max_steps
     obsspace = envs.observation_space
@@ -101,8 +126,8 @@ def main():
     '''
     conspecfunction = ConSpec(args, obsspace, actionspace, device)
     ##############################################################
-    print('steps', args.num_steps)
-    rollouts = RolloutStorage(args.num_steps, args.num_processes,
+    print('steps', max_steps)
+    rollouts = RolloutStorage(max_steps, args.num_processes,
                               obsspace.shape, 
                               actor_critic.recurrent_hidden_state_size)
     rollouts.to(device)
@@ -110,9 +135,10 @@ def main():
     rollouts.obs[0].copy_(torch.transpose(obs, 3, 1))
     episode_rewards = deque(maxlen=int(args.num_processes*args.log_interval))
     episode_lengths = deque(maxlen=int(args.num_processes*args.log_interval))
+    loss_conspec_list = deque(maxlen=int(args.num_processes*args.log_interval))
     
-    # num_updates = int(args.num_env_steps) // args.num_steps // args.num_processes  # number of training episodes per environment
-    num_updates = 10000
+    # num_updates = int(args.num_env_steps) // max_steps // args.num_processes  # number of training episodes per environment
+    num_updates = args.num_epochs
     print('num_updates', num_updates)
     start = time.time()
     # env_frames = {i: [] for i in range(args.num_processes)}  # to make a video of training
@@ -128,7 +154,7 @@ def main():
                 agent.optimizer, j, num_updates,
                 agent.optimizer.lr if args.algo == "acktr" else args.lr)
 
-        for step in range(args.num_steps):
+        for step in range(max_steps):
             # Sample actions
             with torch.no_grad():
                 value, action, action_log_prob, recurrent_hidden_states = actor_critic.act(
@@ -140,6 +166,7 @@ def main():
 
             for i, info in enumerate(infos):
                 if 'episode' in info.keys():
+                    print(f"episode reward: {info['episode']['r']}, episode length: {info['episode']['l']}")
                     episode_rewards.append(info['episode']['r'])
                     episode_lengths.append(info['episode']['l'])
 
@@ -175,7 +202,9 @@ def main():
         '''
         obstotal, rewardtotal, recurrent_hidden_statestotal, actiontotal,  maskstotal  = rollouts.release()
 
-        reward_intrinsic_extrinsic  = conspecfunction.do_everything(obstotal, recurrent_hidden_statestotal, actiontotal, rewardtotal, maskstotal)
+        reward_intrinsic_extrinsic, loss_conspec  = conspecfunction.do_everything(obstotal, recurrent_hidden_statestotal, actiontotal, rewardtotal, maskstotal)
+        if type(loss_conspec) != int:  # loss_conspec is 0 if there's no success trajectory, and conspec does not get updated
+            loss_conspec_list.append(loss_conspec.cpu().detach().numpy())
         ext_int_rewards.append(reward_intrinsic_extrinsic.sum(0).mean().cpu().detach().numpy())  # sum over time, mean over processes
         rollouts.storereward(reward_intrinsic_extrinsic)  # update rollouts.rewards to be reward_intrinsic_extrinsic, i.e. the sum of intrinsic and extrinsic rewards
         ##############################################################
@@ -189,12 +218,13 @@ def main():
 
         ############# Log and save #################
         if (j % args.log_interval == 0 and len(episode_rewards) > 1) or j == num_updates - 1:
-            total_num_steps = (j + 1) * args.num_processes * args.num_steps
+            total_num_steps = (j + 1) * args.num_processes * max_steps
             end = time.time()
             # calculate moving average of ext_rewards and ext_int_rewards to calculate the moving average of intrinsic rewards
             int_rewards_ema = np.mean(ext_int_rewards[-args.num_processes*args.log_interval:]) - np.mean(ext_rewards[-args.num_processes*args.log_interval:])
-            # print(f"Updates {j}, num timesteps {total_num_steps}, FPS {int(total_num_steps / (end - start))}")
-            # print(f'Moving average for external rewards: {np.mean(episode_rewards):.5f}, for episode length {np.mean(episode_lengths):.5f}, for intrinsic rewards: {int_rewards_ema:.1f}')
+            print(f"Updates {j}, num timesteps {total_num_steps}, FPS {int(total_num_steps / (end - start))}")
+            print(f'Moving average for external rewards: {np.mean(episode_rewards):.5f}, for episode length {np.mean(episode_lengths):.5f}, for intrinsic rewards: {int_rewards_ema:.1f}')
+            print(f'Losses: value {value_loss:.5f}, action {action_loss:.5f}, entropy {dist_entropy:.5f}, ConSpec {np.mean(loss_conspec_list):.5f}')
             wandb.log({
                 'Epoch': j,
                 'total_num_steps': total_num_steps,
@@ -210,11 +240,12 @@ def main():
                 'dist_entropy': dist_entropy,
                 'value_loss': value_loss,
                 'action_loss': action_loss,
-                'intrinsic_reward': int_rewards_ema
+                'intrinsic_reward': int_rewards_ema,
+                'loss_conspec': np.mean(loss_conspec_list),
             })
         
         # save checkpoint
-        if args.save_checkpoint:
+        if args.save_checkpoint and np.mean(episode_rewards)> 5:
             if (j % args.save_interval == 0 and int_rewards_ema > 0) or (j == num_updates - 1 and int_rewards_ema > 0):
                 buffer = {
                     'obs': rollouts.obs,
@@ -235,6 +266,18 @@ def main():
                     'bad_masks': sf_buffer[2],
                     'value_preds': sf_buffer[4],
                 }
+                conspec_rollouts_frozen = {}
+                for i in range(args.num_prototypes):
+                    sf_buffer = conspecfunction.rollouts.retrieve_SFbuffer_frozen(i)
+                    conspec_rollouts_frozen[i] = {
+                        'obs': sf_buffer[0],
+                        'rewards': sf_buffer[5],
+                        'hidden_states': sf_buffer[1],
+                        'actions': sf_buffer[3],
+                        'masks': sf_buffer[2],
+                        'bad_masks': sf_buffer[2],
+                        'value_preds': sf_buffer[4],
+                    }
                 tensor_proto_list = [p.data for p in conspecfunction.prototypes.prototypes]
                 model_checkpoint = {
                     'epoch': j,
@@ -244,6 +287,8 @@ def main():
                     'optimizer_ppo_state_dict': agent.optimizer.state_dict(),
                     'prototypes_state_dict': tensor_proto_list,
                     'prototypes': conspecfunction.prototypes.prototypes.state_dict(),
+                    'layers1': conspecfunction.prototypes.layers1.state_dict(),
+                    'layers2': conspecfunction.prototypes.layers2.state_dict(),
                     }
                 cos_checkpoint = {
                     'cos_max_scores' : conspecfunction.rollouts.cos_max_scores, 
@@ -257,6 +302,7 @@ def main():
                 checkpoint_path = os.path.join(full_path, f'model_checkpoint_epoch_{j}.pth')
                 buffer_path = os.path.join(full_path, f'buffer_epoch_{j}.pth')
                 conspec_rollouts_path = os.path.join(full_path, f'conspec_rollouts_epoch_{j}.pth')
+                conspec_rollouts_frozen_path = os.path.join(full_path, f'conspec_rollouts_frozen_epoch_{j}.pth')
                 cos_path = os.path.join(full_path, f'cos_sim_epoch_{j}.pth')
 
                 torch.save(model_checkpoint, checkpoint_path)
@@ -267,6 +313,9 @@ def main():
 
                 torch.save(conspec_rollouts, conspec_rollouts_path)
                 print('success/failure buffers saved')
+
+                torch.save(conspec_rollouts_frozen, conspec_rollouts_frozen_path)
+                print('frozen buffers saved')
 
                 torch.save(cos_checkpoint, cos_path)
                 print('cosine similarity saved')
