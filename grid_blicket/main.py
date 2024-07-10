@@ -89,12 +89,6 @@ def main():
                      'observation_space': obsspace})
     actor_critic.to(device)
 
-    wandb.init(project="grid_blicket_env", 
-            entity="dongyanl1n", 
-            name=f"{args.env_name}-conspec-rec-PO-lr{args.lr}-seed{args.seed}",
-            dir="/network/scratch/l/lindongy/grid_blickets",
-            config=args)
-
 
     if args.algo == 'a2c':
         agent = algo.A2C_ACKTR(
