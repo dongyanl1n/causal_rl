@@ -26,6 +26,8 @@ class MultiDoorKeyEnv(MiniGridEnv):
             self.fixed_positions = fixed_positions
             self.key_positions = None
             self.door_positions = None
+            self.to_reward = False
+            self.rewarded = False  # makes sure agent only gets rewarded once
 
             if max_steps is None:
                 max_steps = (n_keys+1) * 4 * size**2
@@ -87,7 +89,7 @@ class MultiDoorKeyEnv(MiniGridEnv):
 
     def _reward(self):
         # Reward is 10 if reaches goal, step penalty -0.01
-        if self.agent_pos == (self.grid.width - 2, self.grid.height - 2) and all(self.door_states):
+        if self.to_reward and not self.rewarded:
             return 10.0  # High reward for reaching the goal after opening all doors
         else:
             return -0.01  # Small negative reward (step penalty) for each action
@@ -101,14 +103,16 @@ class MultiDoorKeyEnv(MiniGridEnv):
             self.door_positions = None
 
         self.door_states = [False] * self.n_keys
+        self.to_reward = False
+        self.rewarded = False
         
         return super().reset(seed=seed, options=options)
 
     def step(self, action):
         self.step_count += 1
         reward = self._reward()
-        terminated = False
         truncated = False
+        terminated = False
         # Execute the action
         # observation, reward, terminated, truncated, info = MiniGridEnv.step(self, action)
 
@@ -132,10 +136,9 @@ class MultiDoorKeyEnv(MiniGridEnv):
             if fwd_cell is not None and fwd_cell.type == "goal":
                 # terminate only if all doors have been opened
                 if all(self.door_states):
-                    terminated = True
+                    self.to_reward = True
                     reward = self._reward()
-            if fwd_cell is not None and fwd_cell.type == "lava":
-                terminated = True
+                    self.rewarded = True
 
         # Pick up an object. Used on keys
         elif action == self.actions.pickup:
@@ -177,6 +180,7 @@ class MultiDoorKeyEnv(MiniGridEnv):
             self.render()
 
         obs = self.gen_obs()
+        terminated = self.rewarded
 
         return obs, reward, terminated, truncated, {}
 
