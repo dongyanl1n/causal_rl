@@ -160,7 +160,6 @@ def main():
 
             for i, info in enumerate(infos):
                 if 'episode' in info.keys():
-                    print(f"episode reward: {info['episode']['r']}, episode length: {info['episode']['l']}")
                     episode_rewards.append(info['episode']['r'])
                     episode_lengths.append(info['episode']['l'])
 

@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-
+import random
 from a2c_ppo_acktr import algo, utils
 from a2c_ppo_acktr.envs import make_minigrid_envs
 from a2c_ppo_acktr.model import Policy  # taken from ConSpec repo's a2c_ppo_acktr/modelRL.py
@@ -25,15 +25,20 @@ def main():
 
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
+
+    #=========== for single wandb job ===========
+    wandb.init(project="grid_blicket_env", 
+            entity="dongyanl1n", 
+            name=f"{args.env_name}-ppo{'-rec' if args.recurrent_policy else ''}-PO-lr{args.lr}-seed{args.seed}",
+            dir="/network/scratch/l/lindongy/grid_blickets",
+            config=args)
+    #============================================
 
     if args.cuda and torch.cuda.is_available() and args.cuda_deterministic:
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
-
-    log_dir = os.path.expanduser(args.log_dir)
-    eval_log_dir = log_dir + "_eval"
-    utils.cleanup_log_dir(log_dir)
-    utils.cleanup_log_dir(eval_log_dir)
     
     torch.set_num_threads(1)
     device = torch.device("cuda:0" if args.cuda else "cpu")
@@ -41,8 +46,9 @@ def main():
     envs, max_steps = make_minigrid_envs(
         num_envs=args.num_processes,
         env_name=args.env_name,
-        seeds=[(args.seed + i) for i in range(args.num_processes)],
-        device=device
+        device=device,
+        fixed_positions=args.fixed_positions,
+        no_ret_normalization=True
         )
     args.num_steps = max_steps
     obsspace = envs.observation_space
@@ -56,12 +62,6 @@ def main():
         base_kwargs={'recurrent': args.recurrent_policy,
                      'observation_space': obsspace})
     actor_critic.to(device)
-
-    wandb.init(project="grid_blicket_env", 
-            entity="dongyanl1n", 
-            name=f"{args.env_name}-ppo{'-rec' if args.recurrent_policy else ''}-PO-lr{args.lr}-seed{args.seed}",
-            dir="/network/scratch/l/lindongy/grid_blickets",
-            config=args)
 
     if args.algo == 'a2c':
         agent = algo.A2C_ACKTR(
@@ -93,8 +93,8 @@ def main():
     # '''
     # conspecfunction = ConSpec(args, obsspace, actionspace, device)
     ##############################################################
-    print('steps', args.num_steps)
-    rollouts = RolloutStorage(args.num_steps, args.num_processes,
+    print('steps', max_steps)
+    rollouts = RolloutStorage(max_steps, args.num_processes,
                               obsspace.shape, 
                               actor_critic.recurrent_hidden_state_size)
     rollouts.to(device)
@@ -104,7 +104,7 @@ def main():
     episode_lengths = deque(maxlen=int(args.num_processes*args.log_interval))
 
     # num_updates = int(args.num_env_steps) // args.num_steps // args.num_processes  # number of training episodes per environment
-    num_updates = 10000
+    num_updates = args.num_epochs
     print('num_updates', num_updates)
     start = time.time()
     # env_frames = {i: [] for i in range(args.num_processes)}  # to make a video of training
@@ -118,7 +118,7 @@ def main():
                 agent.optimizer, j, num_updates,
                 agent.optimizer.lr if args.algo == "acktr" else args.lr)
 
-        for step in range(args.num_steps):
+        for step in range(max_steps):
             # Sample actions
             with torch.no_grad():
                 value, action, action_log_prob, recurrent_hidden_states = actor_critic.act(
@@ -176,7 +176,7 @@ def main():
         ############# Log and save #################
         # Log stats every log_interval updates or if it is the last update
         if (j % args.log_interval == 0 and len(episode_rewards) > 1) or j == num_updates - 1:
-            total_num_steps = (j + 1) * args.num_processes * args.num_steps
+            total_num_steps = (j + 1) * args.num_processes * max_steps
             end = time.time()
             # print(
             #     "Updates {}, num timesteps {}, FPS {} \n Last {} training episodes: mean/median reward {:.1f}/{:.1f}, min/max reward {:.1f}/{:.1f}\n"
