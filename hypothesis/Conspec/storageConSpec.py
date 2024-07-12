@@ -8,7 +8,7 @@ def _flatten_helper(T, N, _tensor):
 
 class RolloutStorage(object):
     def __init__(self, num_steps, num_processes, obs_shape, 
-                 recurrent_hidden_state_size, num_prototypes):
+                 recurrent_hidden_state_size, num_prototypes, SF_buffer_size):
 
         '''
         contains the current minibatch, as well as the success and failure memory buffers
@@ -50,9 +50,8 @@ class RolloutStorage(object):
         ################### SUCCESS AND FAILURE MEMORY BUFFERS  ###################
         self.recurrent_hidden_state_size = recurrent_hidden_state_size
         self.num_prototypes = num_prototypes
-        self.success = 16
-        self.success_sample = 16
-        self.hidden_state_size = 256
+        self.success = SF_buffer_size
+        self.success_sample = SF_buffer_size
 
         self.obs_batchS = torch.zeros(self.num_steps + 1, self.success, *self.obs_shape)
         self.r_batchS = torch.zeros(self.num_steps, self.success, 1)
@@ -139,15 +138,16 @@ class RolloutStorage(object):
         '''this is the function for adding the trajectories to success (pos) and failure (neg) memory buffers '''
         # self.rewards.shape: ep_length x num_processes x 1
         totalreward = self.rewards.sum(0)  # use sum of rewards across the timesteps as the total reward
+        # pos_cutoff = 10 - 0.01*self.rewards.shape[0]
         if S_or_F == 'pos':
-            rewardssortgood = torch.nonzero(totalreward > 0.5).reshape(-1, )
+            rewardssortgood = torch.nonzero(totalreward >= 10-0.01*self.num_steps).reshape(-1, )
             indicesrewardbatch = rewardssortgood[0::2]
             obsxx = self.obs[:, indicesrewardbatch].to(device)  # obs from the good trajectories
             numberaddedxx = obsxx.shape[1]
             if numberaddedxx >1:
                 indicesrewardbatch = rewardssortgood[0:4:2]
         else:
-            rewardssortbad = torch.nonzero(totalreward < 0.5).reshape(-1, )
+            rewardssortbad = torch.nonzero(totalreward < 10-0.01*self.num_steps).reshape(-1, )
             indicesrewardbatch = rewardssortbad[0::2]
         obs = self.obs[:, indicesrewardbatch].to(device)
         rec = self.recurrent_hidden_states[:, indicesrewardbatch].to(device)
@@ -164,21 +164,26 @@ class RolloutStorage(object):
                 numcareabout = self.stepS
             elif S_or_F == 'neg':
                 numcareabout = self.stepF
+            # print(f"For {S_or_F} buffer, numberadded={numberadded}, numcareabout={numcareabout}, self.obs_batchS.shape[1]={self.obs_batchS.shape[1]}")
             if numberadded + numcareabout <= self.obs_batchS.shape[1]:
                 if S_or_F == 'pos':
+                    # print(f"adding {numberadded} to pos buffer")
                     self.obs_batchS[:, self.stepS:self.stepS + numberadded] = obs
                     self.r_batchS[:, self.stepS:self.stepS + numberadded] = rew
                     self.recurrent_hidden_statesS[:, self.stepS:self.stepS + numberadded] = rec
                     self.act_batchS[:, self.stepS:self.stepS + numberadded] = act
                     self.masks_batchS[:, self.stepS:self.stepS + numberadded] = masks
                     self.stepS = (self.stepS + numberadded)
+                    # print(f"stepS: {self.stepS}")
                 elif S_or_F == 'neg':
+                    # print(f"adding {numberadded} to neg buffer")
                     self.obs_batchF[:, self.stepF:self.stepF + numberadded] = obs
                     self.r_batchF[:, self.stepF:self.stepF + numberadded] = rew
                     self.recurrent_hidden_statesF[:, self.stepF:self.stepF + numberadded] = rec
                     self.act_batchF[:, self.stepF:self.stepF + numberadded] = act
                     self.masks_batchF[:, self.stepF:self.stepF + numberadded] = masks
                     self.stepF = (self.stepF + numberadded)
+                    # print(f"stepF: {self.stepF}")
             #'''
             elif (numberadded + numcareabout >= self.obs_batchS.shape[1]) and (
                     numcareabout < self.obs_batchS.shape[1]):
@@ -190,6 +195,8 @@ class RolloutStorage(object):
                     self.act_batchS[:, self.stepS:self.stepS + numbertoadd] = act[:, :numbertoadd]
                     self.masks_batchS[:, self.stepS:self.stepS + numbertoadd] = masks[:, :numbertoadd]
                     self.stepS = (self.stepS + numbertoadd)
+                    # print(f"adding {numbertoadd} to pos buffer")
+                    # print(f"stepS: {self.stepS}")
 
                 elif S_or_F == 'neg':
                     numbertoadd = self.obs_batchS.shape[1] - self.stepF
@@ -199,6 +206,8 @@ class RolloutStorage(object):
                     self.act_batchF[:, self.stepF:self.stepF + numbertoadd] = act[:, :numbertoadd]
                     self.masks_batchF[:, self.stepF:self.stepF + numbertoadd] = masks[:, :numbertoadd]
                     self.stepF = (self.stepF + numbertoadd)
+                    # print(f"adding {numbertoadd} to neg buffer")
+                    # print(f"stepF: {self.stepF}")
 
             elif numcareabout == self.obs_batchS.shape[
                 1]:
@@ -217,6 +226,7 @@ class RolloutStorage(object):
                     self.recurrent_hidden_statesS = self.recurrent_hidden_statesS[:,lenconsider:]
                     self.act_batchS = self.act_batchS[:,lenconsider:]
                     self.masks_batchS = self.masks_batchS[:,lenconsider:]
+                    # print(f"keeping the last {lenconsider} in pos buffer")
 
                 elif S_or_F == 'neg':
                     lenconsider =  obs.shape[1]
@@ -230,6 +240,7 @@ class RolloutStorage(object):
                     self.recurrent_hidden_statesF = self.recurrent_hidden_statesF[:, lenconsider:]
                     self.act_batchF = self.act_batchF[:, lenconsider:]
                     self.masks_batchF = self.masks_batchF[:, lenconsider:]
+                    # print(f"keeping the last {lenconsider} in neg buffer")
 
     def to(self, device):
         '''just adding cuda to all the memory buffers'''
