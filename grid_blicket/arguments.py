@@ -89,8 +89,8 @@ def get_args():
     parser.add_argument(
         '--save-interval',
         type=int,
-        default=1000,
-        help='save interval, one save per n updates (default: 1000)')
+        default=100,
+        help='save interval, one save per n updates (default: 100)')
     parser.add_argument(
         '--num-epochs',
         type=int,
