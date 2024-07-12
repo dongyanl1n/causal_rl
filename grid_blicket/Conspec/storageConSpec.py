@@ -140,14 +140,14 @@ class RolloutStorage(object):
         totalreward = self.rewards.sum(0)  # use sum of rewards across the timesteps as the total reward
         # pos_cutoff = 10 - 0.01*self.rewards.shape[0]
         if S_or_F == 'pos':
-            rewardssortgood = torch.nonzero(totalreward > 0.5).reshape(-1, )
+            rewardssortgood = torch.nonzero(totalreward >= 10-0.01*self.num_steps).reshape(-1, )
             indicesrewardbatch = rewardssortgood[0::2]
             obsxx = self.obs[:, indicesrewardbatch].to(device)  # obs from the good trajectories
             numberaddedxx = obsxx.shape[1]
             if numberaddedxx >1:
                 indicesrewardbatch = rewardssortgood[0:4:2]
         else:
-            rewardssortbad = torch.nonzero(totalreward < 0.5).reshape(-1, )
+            rewardssortbad = torch.nonzero(totalreward < 10-0.01*self.num_steps).reshape(-1, )
             indicesrewardbatch = rewardssortbad[0::2]
         obs = self.obs[:, indicesrewardbatch].to(device)
         rec = self.recurrent_hidden_states[:, indicesrewardbatch].to(device)

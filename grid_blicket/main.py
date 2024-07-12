@@ -27,7 +27,7 @@ def main():
     torch.cuda.manual_seed_all(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
-
+    checkpoint_saved = False
     #========================= for wandb sweep ==============================
     # Initialize wandb first
     # wandb.init(project="grid_blicket_env", 
@@ -238,8 +238,8 @@ def main():
             })
         
         # save checkpoint
-        if args.save_checkpoint and np.mean(episode_rewards)> 5:
-            if (j % args.save_interval == 0 and int_rewards_ema > 0) or (j == num_updates - 1 and int_rewards_ema > 0):
+        if args.save_checkpoint:
+            if (j % args.save_interval == 0 or j == num_updates - 1) and not checkpoint_saved and np.mean(episode_rewards)> 9.5:
                 buffer = {
                     'obs': rollouts.obs,
                     'rewards': rollouts.rewards,
@@ -312,6 +312,8 @@ def main():
 
                 torch.save(cos_checkpoint, cos_path)
                 print('cosine similarity saved')
+
+                checkpoint_saved = True
 
     wandb.finish()
 
