@@ -24,8 +24,8 @@ class prototypes(nn.Module):
         self.prototypes = nn.ParameterList([nn.Parameter(torch.randn(1, self.hidden_size) * 1.) for i in range(num_prototypes)])
         self.cos = nn.CosineSimilarity(dim=2, eps=1e-6)
 
-    def forward(self, hidden, prototype_train):
-        # hidden.shape = torch.Size([ep_length, num_processes, 512])
+    def forward(self, hidden, prototype_train, loss_ortho_scale):
+        # hidden.shape = torch.Size([ep_length, num_rollouts, 512])
         out1 = [None] * self.num_prototypes
         cos_scores = [None] * self.num_prototypes
         ortho = [None] * self.num_prototypes
@@ -50,7 +50,7 @@ class prototypes(nn.Module):
         ortho_scores_diag = torch.diagonal(ortho_scores, dim1=1, dim2=2)
         loss_ortho = (ortho_scores[:, :, :])[:success_inds] - torch.diag_embed(ortho_scores_diag[:, :], dim1=1, dim2=2)[:success_inds]
         loss_ortho = loss_ortho.sum()
-        costfinal = loss_cos * 1. + (loss_ortho * .2) /self.num_prototypes
+        costfinal = loss_cos * 1. + (loss_ortho * loss_ortho_scale) /self.num_prototypes
         success_scores = torch.abs(cos_max[:success_inds]).mean(0)
         fail_scores = torch.abs(cos_max[success_inds:]).mean(0)
 
