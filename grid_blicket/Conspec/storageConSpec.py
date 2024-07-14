@@ -35,9 +35,9 @@ class RolloutStorage(object):
         self.actions = torch.zeros(num_steps, num_processes, action_shape)
         self.actions = self.actions.long()
         self.masks = torch.ones(num_steps + 1, num_processes, 1)
-        self.max_indx = torch.zeros(num_processes, num_prototypes)  # torch.Size([32, 8])
-        self.cos_scores = torch.zeros(num_steps, num_processes, num_prototypes) # torch.Size([125, 32, 8])
-        self.cos_max_scores= torch.zeros(num_processes, num_prototypes) # torch.Size([32, 8])
+        self.max_indx = None  # to be assigned when conspec is updated
+        self.cos_scores = None
+        self.cos_max_scores= None
 
         # Masks that indicate whether it's a true terminal state
         # or time limit end state
