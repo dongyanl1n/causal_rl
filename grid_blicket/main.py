@@ -239,7 +239,7 @@ def main():
         
         # save checkpoint
         if args.save_checkpoint:
-            if (j % args.save_interval == 0 or j == num_updates - 1) and not checkpoint_saved and np.mean(episode_rewards)> 9.5:
+            if ((j+1) % args.save_interval == 0 or j == num_updates - 1) and not checkpoint_saved and np.mean(episode_rewards)> 9.5:
                 buffer = {
                     'obs': rollouts.obs,
                     'rewards': rollouts.rewards,
