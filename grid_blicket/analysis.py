@@ -2,197 +2,108 @@ import torch
 import os 
 import numpy as np
 import matplotlib.pyplot as plt
-
-def vis_proto_states(sf_buffer_obs, cos_scores):
-    '''
-    plot the states that are matched with each prototype using cos scores and not max score
-    num_prototype figures each has num_processes images
-    sf_buffer_obs -> (185, 32, 3, 5, 5) : time steps, processes, channels, height, width
-    cos_scores -> (185, 32, 8)
-    '''
-    cos_score_proto =  {}
-    sf_obs_reshaped = np.reshape(sf_buffer_obs, (cos_scores.shape[0], cos_scores.shape[1], *sf_buffer_obs.shape[1:]))
-    num_prototypes = cos_scores.shape[2]
-
-    # axes = axes.flatten()
-    fig, axes = plt.subplots(1, 32, figsize=(32 * 2, 2))
-
-    # Iterate over time steps and processes to find observations with maximum cosine similarity
-    for prototype in range(num_prototypes):
-        cos_score_proto[prototype] = cos_scores[:,:,prototype]
-        indx = np.argmax(cos_score_proto[prototype], axis=0)
-        scores = np.max(cos_score_proto[prototype], axis=0)
-        obs_over_time = []
-        for i in range(indx.shape[0]):
-            obs = sf_obs_reshaped[indx[i], i]
-            obs = np.transpose(obs, (1, 2, 0))
-            obs_over_time.append(obs)
-
-        # Iterate over the list of images
-        for i, image in enumerate(obs_over_time):
-            # Plot the i-th image
-            if image.max() > 1.0:  # assuming the data should be in [0, 1] range
-                image = image / 255.0  # Normalize
-            elif image.max() > 1.0:
-                image = image.astype(np.uint8)
-
-            axes[i].imshow(image)
-            axes[i].axis('off')
-            # set the title of each obs with cosine similarity
-            title = ''
-            if scores is not None:
-                score = scores[i]
-                title += f"Score: {score:.2f}"
-            axes[i].set_title(title)
-        plt.tight_layout()
-        plt.savefig("states_prototypes{}.png".format(prototype))
+from analysis_util import plot_cos_scores, render_obs, plot_and_save_obs_image, save_episode_as_gif, plot_high_cos_obs
 
 
-def extract_observations(cosine_sim_idx_matrix, observation_matrix):
-    """
-    Given matrices:
-    cosine_similarity_matrix -> (32, 8) or (8, )
-    observation_matrix => (185, 32, 3, 5, 5) or (32, 8, 3, 5, 5)
-    """
-    if cosine_sim_idx_matrix.ndim == 2:  # When cosine similarity index matrix is 2D
-        num_time_steps = cosine_sim_idx_matrix.shape[0]
-        num_prototypes = cosine_sim_idx_matrix.shape[1]
-
-        extracted_observations = np.zeros((num_time_steps, num_prototypes, *observation_matrix.shape[2:]))
-        for i in range(cosine_sim_idx_matrix.shape[0]):
-            for j in range(cosine_sim_idx_matrix.shape[1]):
-                idx = cosine_sim_idx_matrix[i, j]
-                observation = observation_matrix[idx, i]  # Extract the observation
-                extracted_observations[i, j] = observation  # Assign to the result
-
-    elif cosine_sim_idx_matrix.ndim == 1:  # When cosine similarity index matrix is 1D
-        num_prototypes = cosine_sim_idx_matrix.shape[0]
-        extracted_observations = np.zeros((num_prototypes, *observation_matrix.shape[2:]))
-        for j in range(num_prototypes):
-            idx = cosine_sim_idx_matrix[j]
-            observation = observation_matrix[idx, j]  # Extract the observation
-            extracted_observations[j] = observation  # Assign to the result
-
-    return extracted_observations
-
-
-def plot_observations(observations, scores, path, filename):
-    """
-    Given matrices:
-    scores -> (32, 8) or (8, )
-    observations => (32, 8, 3, 5, 5) or (8, 3, 5, 5)
-    """
-    if scores.ndim == 2:
-        # Number of rows and columns in the cosine similarity matrix
-        rows, cols = observations.shape[:2]
-        print(rows, cols)
-        fig, axs = plt.subplots(rows, cols, figsize=(cols * 2, rows * 2))
-        for i in range(rows):
-            for j in range(cols):
-                ax = axs[i, j]
-                obs = observations[i, j].transpose(1, 2, 0)  # Adjust for color channel position
-                
-                if obs.max() > 1.0:  # assuming the data should be in [0, 1] range
-                    obs = obs / 255.0  # Normalize
-                # Convert to uint8 if data is of integer type but not uint8
-                elif obs.max() > 1.0:
-                    obs = obs.astype(np.uint8)
-                
-                
-                ax.imshow(obs, vmin=0, vmax=1)
-                ax.axis('off')
-                # add title with cosine similarity score
-                title = ''
-                if scores is not None:
-                    score = scores[i, j]
-                    title += f"Score: {score:.2f}"
-                ax.set_title(title)
-        plt.tight_layout()
-
-    elif scores.ndim == 1:
-        rows = observations.shape[0]
-        print(rows)
-        fig, axs = plt.subplots(rows, figsize=(rows * 2, rows))
-        
-        for i in range(rows):
-            ax = axs[i]
-            obs = observations[i].transpose(1, 2, 0)  # Adjust for color channel position
-            if obs.max() > 1.0:  # assuming the data should be in [0, 1] range
-                obs = obs / 255.0  # Normalize
-            # Convert to uint8 if data is of integer type but not uint8
-            elif obs.max() > 1.0:
-                obs = obs.astype(np.uint8)
-            
-            ax.imshow(obs, vmin=0, vmax=1)
-            ax.axis('off')
-            # add title with cosine similarity score
-            title = ''
-            if scores is not None:
-                score = scores[i]
-                title += f"Score: {score:.2f}, Prototype: {i}"
-            ax.set_title(title)
-        plt.tight_layout()
+def reshape_buffer(tensor, split_idx=16, len_epi=432):
+    shape = tensor.shape
+    if 2*split_idx in shape:
+        return tensor
+    elif shape[0] == len_epi*2*split_idx:
+        return tensor.reshape(len_epi, 2*split_idx, *shape[1:])
+    else:
+        print(f"Warning: Unexpected shape {shape} for buffer tensor")
+        return tensor
     
-    # Create folder if it doesn't exist
-    if not os.path.exists(path):
-        os.makedirs(path)
-
-    # Save the figure
-    save_path = os.path.join(path, filename)
-    plt.savefig(save_path)
-    plt.close(fig)  # Close the plot to free up memory
-    return save_path
-
-
-def vis_proto_max_state_processes(obs, max_cos_score, indices, num_processes, path, filename):
-    '''
-    num_processes rows of num of prototype images, a figure of 32 x 8 
-    '''
-    dim= int(obs.shape[0]/num_processes)
-    sf_obs_reshaped = np.reshape(obs, (dim, num_processes, *sf_buffer_obs.shape[1:]))
-    extracted_obs = extract_observations(indices, sf_obs_reshaped)
-    saved_file_path = plot_observations(extracted_obs, max_cos_score, path, filename)
-
-def vis_proto_max_state(obs, max_cos_score, indices, num_processes, path, filename):
-    dim= int(obs.shape[0]/num_processes)
-    sf_obs_reshaped = np.reshape(obs, (dim, num_processes, *sf_buffer_obs.shape[1:]))
-    extracted_obs = extract_observations(indices, sf_obs_reshaped) # (32, 8, 3, 5, 5)
-    maxx_score = np.max(max_cos_score, axis=0) # max over processes
-    maxx_index = np.argmax(max_cos_score, axis=0)
-    max_extracted_obs = extract_observations(maxx_index, extracted_obs)
-    saved_file_path = plot_observations(max_extracted_obs, maxx_score, path, filename)
-
 if __name__ == "__main__":
 
-    ### Data loaded from key to door 3 envs
-    base_directory = '/network/scratch/l/lindongy/grid_blickets/conspec_ckpt/high_rit_low_ret/MultiDoorKeyEnv-8x8-2keys-v0-conspec-rec-PO-lr0.0005-seed234'
+    base_directory = '/network/scratch/l/lindongy/grid_blickets/conspec_ckpt/MultiDoorKeyEnv-6x6-2keys-v0-conspec-rec-PO-lr0.0006-intrinsR0.2-lrConSpec0.006-entropy0.02-num_mini_batch4-seed5'
     
-    data_path = 'conspec_rollouts_epoch_9999.pth'
-    cos_sim_path = 'cos_sim_epoch_9999.pth'
+    data_path = 'conspec_rollouts_epoch_5600.pth'
+    cos_sim_path = 'cos_sim_epoch_5600.pth'
+    frozen_sfbuffer_path = 'conspec_rollouts_frozen_epoch_5600.pth'
+    buffer_path = 'buffer_epoch_5600.pth'
     
     data_full_path = os.path.join(base_directory, data_path)
     cos_full_path = os.path.join(base_directory, cos_sim_path)
+    frozen_sfbuffer_full_path = os.path.join(base_directory, frozen_sfbuffer_path)
+    buffer_full_path = os.path.join(base_directory, buffer_path)
     
-    ## Load the data
-    sf_buffer_obs = torch.load(data_full_path)['obs'] #  (768*32, 3, 7, 7)
-    cos_max_scores = torch.load(cos_full_path)['cos_max_scores'] # (32, 8)
-    cos_max_indices = torch.load(cos_full_path)['max_indices'] # (32, 8)
-    cos_scores = torch.load(cos_full_path)['cos_scores'] # (768, 32, 8)
+    split_idx = 16  # 16 successes
+    
+    # Load and split conspec_rollouts
+    conspec_rollouts = torch.load(data_full_path)
+    sf_buffer = {}
+    for key in conspec_rollouts.keys():
+        data = conspec_rollouts[key]
+        reshaped_data = reshape_buffer(data)
+        assert reshaped_data.shape[1] == 2*split_idx
+        sf_buffer[f'{key}_S'] = reshaped_data[:, :split_idx].detach().cpu().numpy()
+        sf_buffer[f'{key}_F'] = reshaped_data[:, split_idx:].detach().cpu().numpy()
 
-    sf_buffer_obs = sf_buffer_obs.detach().cpu().numpy()
-    cos_max_scores = cos_max_scores.detach().cpu().numpy()
-    cos_max_indices = cos_max_indices.detach().cpu().numpy()
-    cos_scores = cos_scores.detach().cpu().numpy()
-    num_processes = cos_max_scores.shape[0]  
+    # Load and split conspec_rollouts_frozen
+    conspec_rollouts_frozen = torch.load(frozen_sfbuffer_full_path)
+    frozen_sf_buffers = {}
+    for i in conspec_rollouts_frozen.keys():
+        frozen_sf_buffers[i] = {}
+        for key in conspec_rollouts_frozen[i].keys():
+            data = conspec_rollouts_frozen[i][key]
+            reshaped_data = reshape_buffer(data)
+            assert reshaped_data.shape[1] == 2*split_idx
+            frozen_sf_buffers[i][f'{key}_S'] = reshaped_data[:, :split_idx].detach().cpu().numpy()
+            frozen_sf_buffers[i][f'{key}_F'] = reshaped_data[:, split_idx:].detach().cpu().numpy()
+    
+    # Load buffer
+    rollouts = torch.load(buffer_full_path)
+    rollouts_numpy = {key: value.detach().cpu().numpy() for key, value in rollouts.items()}
+
+    # Load cos_sim
+    cos_checkpoint = torch.load(cos_full_path)
+    cos_max_scores = cos_checkpoint['cos_max_scores'].detach().cpu().numpy()
+    cos_max_indices = cos_checkpoint['max_indices'].detach().cpu().numpy()
+    cos_scores = cos_checkpoint['cos_scores'].detach().cpu().numpy()
+    cos_max_scoresS = cos_max_scores[:split_idx]
+    cos_max_scoresF = cos_max_scores[split_idx:]
+    cos_max_indicesS = cos_max_indices[:split_idx]
+    cos_max_indicesF = cos_max_indices[split_idx:]
+    cos_scoresS = cos_scores[:, :split_idx]
+    cos_scoresF = cos_scores[:, split_idx:]
+
+    sf_buffer_obs = np.concatenate((sf_buffer['obs_S'], sf_buffer['obs_F']), axis=1)
     num_prototypes = cos_max_scores.shape[1]
-    
+
+    obs_batchS = np.array([frozen_sf_buffers[i]['obs_S'] for i in range(num_prototypes)]).transpose(1, 2, 0, 3, 4, 5)
+    obs_batchF = np.array([frozen_sf_buffers[i]['obs_F'] for i in range(num_prototypes)]).transpose(1, 2, 0, 3, 4, 5)
+    assert obs_batchS.shape[0:3] == cos_scoresS.shape
+    assert obs_batchF.shape[0:3] == cos_scoresF.shape
+
+
     figure_path = os.path.join(base_directory, "figures")
+    S_figure_path = os.path.join(figure_path, "success")
+    F_figure_path = os.path.join(figure_path, "fail")
     if not os.path.exists(figure_path):
-        os.makedirs(figure_path)
-    filename = "max_states_8x8_2keys_10000.png"
-    vis_proto_max_state_processes(sf_buffer_obs, cos_max_scores, cos_max_indices, num_processes, figure_path, filename)
+        os.makedirs(figure_path, exist_ok=True)
+    if not os.path.exists(S_figure_path):
+        os.makedirs(S_figure_path, exist_ok=True)
+    if not os.path.exists(F_figure_path):
+        os.makedirs(F_figure_path, exist_ok=True)
+
+    #==============================================================================
+
+    # Plot cos scores
+    # plot_cos_scores(cos_scoresS, S_figure_path)
+    # plot_cos_scores(cos_scoresF, F_figure_path)
     
-    # vis_proto_states(sf_buffer_obs, cos_scores)
-    
-    filename = "max_proto_1state_8x8_2keys_10000.png"
-    vis_proto_max_state(sf_buffer_obs, cos_max_scores, cos_max_indices, num_processes, figure_path, filename)
+    # try rendering the observation
+    # t = 105
+    i = 0  # index of rollout
+    # obs = rollouts_numpy['obs'][t, i] # shape: len_epi, num_rollouts, 3, 7, 7
+    # image_obs = render_obs(obs)
+    # plot_and_save_obs_image(image_obs, 'obs_image.png')
+
+    # episode_obs = rollouts_numpy['obs'][:, i]  # shape: len_epi, num_rollouts, 3, 7, 7
+    # save_episode_as_gif(episode_obs, filename='my_episode.gif', duration=200)
+
+    plot_high_cos_obs(cos_scoresS, obs_batchS, threshold=0.95, save_path=S_figure_path)
+    plot_high_cos_obs(cos_scoresF, obs_batchF, threshold=0.95, save_path=F_figure_path)
+
