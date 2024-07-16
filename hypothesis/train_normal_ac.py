@@ -15,7 +15,7 @@ import random
 from args import get_args
 from a2c_ppo_acktr import algo, utils
 from a2c_ppo_acktr.envs import make_minigrid_envs
-from a2c_ppo_acktr.model import Hypothesis_Policy  # hypothesis-conditioned policy
+from a2c_ppo_acktr.model_old import Policy  # normal policy network, not taking hypothesis as input
 from a2c_ppo_acktr.storage import RolloutStorage  # taken from ConSpec repo's a2c_ppo_acktr/storage.py
 from Conspec.ConSpec import ConSpec
 import datetime
@@ -52,7 +52,6 @@ def load_partial_weights(actor_critic, checkpoint):
 # @profile
 def main():
     args = get_args()
-
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     np.random.seed(args.seed)
@@ -71,7 +70,7 @@ def main():
     # Initialize Comet ML experiment
     # experiment = Experiment(
     #     api_key="QeWdbZ4T3xigB5rCZuzGWzh2G",
-    #     project_name="hypothesis_network",
+    #     project_name="hypothesis",
     #     workspace="dongyanl1n"
     # )
 
@@ -102,7 +101,6 @@ def main():
     
     torch.set_num_threads(1)
     device = torch.device("cuda:0" if args.cuda else "cpu")
-
     envs, max_steps = make_minigrid_envs(
         num_envs=args.num_processes,
         env_name=args.env_name,
@@ -125,12 +123,10 @@ def main():
         print("Using all prototypes. Updating agent with Rit+Ret")
     else:
         print("Updating agent with Rit")
-    hypothesis_batch = hypothesis.repeat(args.num_processes, 1)
 
-    actor_critic = Hypothesis_Policy(
+    actor_critic = Policy(
         obsspace.shape,
         actionspace,
-        args.num_prototypes, 
         base_kwargs={'recurrent': args.recurrent_policy,
                      'observation_space': obsspace})
     actor_critic.to(device)
@@ -145,7 +141,7 @@ def main():
             alpha=args.alpha,
             max_grad_norm=args.max_grad_norm)
     elif args.algo == 'ppo':
-        agent = algo.HYPOTHESIS_PPO(
+        agent = algo.PPO(
             actor_critic,
             args.clip_param,
             args.ppo_epoch,
@@ -220,7 +216,7 @@ def main():
             # Sample actions
             with torch.no_grad():
                 value, action, action_log_prob, recurrent_hidden_states = actor_critic.act(
-                    rollouts.obs[step], hypothesis_batch, rollouts.recurrent_hidden_states[step],
+                    rollouts.obs[step], rollouts.recurrent_hidden_states[step],
                     rollouts.masks[step])
 
             # Obser reward and next obs
@@ -248,7 +244,7 @@ def main():
 
         with torch.no_grad():
             next_value = actor_critic.get_value(
-                rollouts.obs[-1], hypothesis_batch, rollouts.recurrent_hidden_states[-1],
+                rollouts.obs[-1], rollouts.recurrent_hidden_states[-1],
                 rollouts.masks[-1]).detach()
             # now compute new rewards
             rewardstotal = rollouts.retrieveR()  # gets extrinsic reward, i.e. rollouts.rewards  # torch.Size([ep_length, num_processes, 1])
@@ -264,8 +260,7 @@ def main():
         obstotal, rewardtotal, recurrent_hidden_statestotal, actiontotal,  maskstotal  = rollouts.release()
 
         with torch.no_grad():
-            conspecfunction.store_memories(obstotal, recurrent_hidden_statestotal, actiontotal, rewardtotal, maskstotal)
-            # reward_intrinsic_extrinsic, reward_intrinsic = conspecfunction.calc_intrinsic_reward_eq3(hypothesis_batch)
+            conspecfunction.store_memories(obstotal, recurrent_hidden_statestotal, actiontotal, rewardtotal, maskstotal)  # store in main buffer only
             reward_intrinsic_extrinsic, reward_intrinsic = conspecfunction.calc_intrinsic_reward_v0(prototypes_used=hypothesis)
 
         ext_int_rewards.append(reward_intrinsic_extrinsic.sum(0).mean().cpu().detach().numpy())  # sum over time, mean over processes
@@ -278,7 +273,8 @@ def main():
         rollouts.compute_returns(next_value, args.use_gae, args.gamma,
                                  args.gae_lambda, args.use_proper_time_limits)  # compute returns using updated rewards (intrinsic+extrinsic)
 
-        value_loss, action_loss, dist_entropy = agent.update(rollouts, hypothesis_batch)  # update actor_critic based on returns and value_preds
+        # value_loss, action_loss, dist_entropy = agent.update(rollouts, hypothesis_batch)  # update actor_critic based on returns and value_preds
+        value_loss, action_loss, dist_entropy = agent.update(rollouts)  # update actor_critic based on returns and value_preds
         rollouts.after_update()  # last step becomes first step of next rollout
 
         ############# Log and save #################
@@ -308,7 +304,7 @@ def main():
             #    'action_loss': action_loss,
             #    'intrinsic_reward': int_rewards_ema,
             #})
-    #wandb.finish()
+    # wandb.finish()
     #         experiment.log_metrics({
     #             'Epoch': j,
     #             'total_num_steps': total_num_steps,
@@ -321,7 +317,6 @@ def main():
     #             'intrinsic_reward': int_rewards_ema,
     #         }, step=total_num_steps)
     # experiment.end()
-    
 
 
 if __name__ == "__main__":
