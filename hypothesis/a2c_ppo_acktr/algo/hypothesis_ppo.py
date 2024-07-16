@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 
-class PPO():
+class HYPOTHESIS_PPO():
     def __init__(self,
                  actor_critic,
                  clip_param,
@@ -31,7 +31,7 @@ class PPO():
 
         self.optimizer = optim.Adam(actor_critic.parameters(), lr=lr, eps=eps)
 
-    def update(self, rollouts):
+    def update(self, rollouts, hypothesis_batch):
         advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1]
         advantages = (advantages - advantages.mean()) / (
             advantages.std() + 1e-5)
@@ -55,7 +55,7 @@ class PPO():
 
                 # Reshape to do in a single forward pass for all steps
                 values, action_log_probs, dist_entropy, _ = self.actor_critic.evaluate_actions(
-                    obs_batch, recurrent_hidden_states_batch, masks_batch,
+                    obs_batch, hypothesis_batch[0].repeat(obs_batch.shape[0],1), recurrent_hidden_states_batch, masks_batch,
                     actions_batch)
 
                 ratio = torch.exp(action_log_probs -

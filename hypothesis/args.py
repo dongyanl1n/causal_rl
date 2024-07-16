@@ -139,14 +139,9 @@ def get_args():
         default=8,
         help='number of prototypes used in Conspec')
     parser.add_argument(
-        '--lrConSpec', 
-        type=float, 
-        default=2e-3, 
-        help='learning rate (default: 2e-3)')
-    parser.add_argument(
         '--intrinsicR_scale',
         type=float,
-        default=0.2,
+        default=0.05,
         help='lambda for intrinsic reward from ConSpec')
     parser.add_argument(
         '--save_checkpoint',
@@ -159,25 +154,29 @@ def get_args():
         default=16,
         help='size of the success and failure memory buffers')
     parser.add_argument(
-        '--freeze_prototype_steps',
-        type=int,
-        default=25,
-        help='gradient step criterion for freeze prototype')
-    parser.add_argument(
         '--cos_score_threshold',
         type=float,
-        default=0.6,
+        default=0.99,
         help='cosine similarity threshold for ConSpec')
     parser.add_argument(
         '--roundhalf',
         type=int,
         default=3,
         help='window size for rolling average')
+    
+    ####################################
+    # Arguments pertaining to loading pretrained Conspec
+    ####################################
     parser.add_argument(
-        '--loss_ortho_scale',
-        type=float,
-        default=0.2,
-        help='scale for loss_ortho in loss_conspec')
+        '--base_path',
+        type=str,
+        default='/network/scratch/l/lindongy/grid_blickets/conspec_ckpt/MultiDoorKeyEnv-6x6-2keys-v0-conspec-rec-PO-lr0.0006-intrinsR0.1-lrConSpec0.01-entropy0.02-num_mini_batch4-seed1',
+        help='path to the pretrained Conspec model')
+    parser.add_argument(
+        '--ckpt_epi',
+        type=int,
+        default=3399,
+        help='episode number of the pretrained Conspec model')
     
     args = parser.parse_args()
 

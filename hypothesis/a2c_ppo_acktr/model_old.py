@@ -12,9 +12,9 @@ class Flatten(nn.Module):
         return x.view(x.size(0), -1)
 
 
-class Hypothesis_Policy(nn.Module):
-    def __init__(self, obs_shape, action_space, num_prototypes, base=None, base_kwargs=None):
-        super(Hypothesis_Policy, self).__init__()
+class Policy(nn.Module):
+    def __init__(self, obs_shape, action_space, base=None, base_kwargs=None):
+        super(Policy, self).__init__()
         if base_kwargs is None:
             base_kwargs = {}
         if base is None:
@@ -25,7 +25,7 @@ class Hypothesis_Policy(nn.Module):
             else:
                 raise NotImplementedError
 
-        self.base = base(obs_shape[0], num_prototypes, **base_kwargs)
+        self.base = base(obs_shape[0], **base_kwargs)
 
         self.dist = Categorical(self.base.output_size, action_space.n)
 
@@ -42,8 +42,9 @@ class Hypothesis_Policy(nn.Module):
     def forward(self, inputs, rnn_hxs, masks):
         raise NotImplementedError
 
-    def act(self, inputs, hypothesis, rnn_hxs, masks, deterministic=False):
-        value, actor_features, rnn_hxs = self.base(inputs, hypothesis, rnn_hxs, masks)
+    def act(self, inputs, rnn_hxs, masks, deterministic=False):
+
+        value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
         dist = self.dist(actor_features)
 
         if deterministic:
@@ -56,12 +57,12 @@ class Hypothesis_Policy(nn.Module):
 
         return value, action, action_log_probs, rnn_hxs
 
-    def get_value(self, inputs, hypothesis, rnn_hxs, masks):
-        value, _, _ = self.base(inputs, hypothesis, rnn_hxs, masks)
+    def get_value(self, inputs, rnn_hxs, masks):
+        value, _, _ = self.base(inputs, rnn_hxs, masks)
         return value
 
-    def evaluate_actions(self, inputs, hypothesis, rnn_hxs, masks, action):
-        value, actor_features, rnn_hxs = self.base(inputs, hypothesis, rnn_hxs, masks)
+    def evaluate_actions(self, inputs, rnn_hxs, masks, action):
+        value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
         dist = self.dist(actor_features)
         action_log_probs = dist.log_probs(action)
         dist_entropy = dist.entropy().mean()
@@ -156,7 +157,7 @@ class NNBase(nn.Module):
 
 
 class CNNBase(NNBase):
-    def __init__(self, num_inputs, num_prototypes, observation_space, recurrent=False, hidden_size=512):
+    def __init__(self, num_inputs, observation_space, recurrent=False, hidden_size=512):
         super(CNNBase, self).__init__(recurrent, hidden_size, hidden_size)
 
         init_ = lambda m: init(m, nn.init.orthogonal_, lambda x: nn.init.
@@ -168,24 +169,24 @@ class CNNBase(NNBase):
         
         # Compute shape by doing one forward pass
         with torch.no_grad():
-            n_flatten = self.cnn(torch.as_tensor(observation_space.sample()[None]).float()).shape[1]  # 1568
+            n_flatten = self.cnn(torch.as_tensor(observation_space.sample()[None]).float()).shape[1]
 
-        self.linear = nn.Sequential(init_(nn.Linear(n_flatten + num_prototypes, hidden_size)), nn.ReLU())
+        self.linear = nn.Sequential(init_(nn.Linear(n_flatten, hidden_size)), nn.ReLU())
 
         self.critic_linear = init_(nn.Linear(hidden_size, 1))
         self.train()
 
-    def forward(self, inputs, hypothesis, rnn_hxs, masks):
-        x = self.cnn(inputs/255.)  # num_processes, 1568
-        x = torch.cat([x, hypothesis], dim=1)  # Concatenate CNN output with hypothesis
-        x = self.linear(x)
+    def forward(self, inputs, rnn_hxs, masks):
+        #This is the RL agent's encoder, which is learned independently fromthe ConSpec encoder
+        x = self.linear(self.cnn(inputs/255.))
         if self.is_recurrent:
             x, rnn_hxs = self._forward_gru(x, rnn_hxs, masks)
         return self.critic_linear(x), x, rnn_hxs
 
+
 class MLPBase(NNBase):
-    def __init__(self, num_inputs, num_prototypes, recurrent=False, hidden_size=64):
-        super(MLPBase, self).__init__(recurrent, num_inputs + num_prototypes, hidden_size)
+    def __init__(self, num_inputs, recurrent=False, hidden_size=64):
+        super(MLPBase, self).__init__(recurrent, num_inputs, hidden_size)
 
         if recurrent:
             num_inputs = hidden_size
@@ -194,19 +195,19 @@ class MLPBase(NNBase):
                                constant_(x, 0), np.sqrt(2))
 
         self.actor = nn.Sequential(
-            init_(nn.Linear(num_inputs + num_prototypes, hidden_size)), nn.Tanh(),
+            init_(nn.Linear(num_inputs, hidden_size)), nn.Tanh(),
             init_(nn.Linear(hidden_size, hidden_size)), nn.Tanh())
 
         self.critic = nn.Sequential(
-            init_(nn.Linear(num_inputs + num_prototypes, hidden_size)), nn.Tanh(),
+            init_(nn.Linear(num_inputs, hidden_size)), nn.Tanh(),
             init_(nn.Linear(hidden_size, hidden_size)), nn.Tanh())
 
         self.critic_linear = init_(nn.Linear(hidden_size, 1))
 
         self.train()
 
-    def forward(self, inputs, hypothesis, rnn_hxs, masks):
-        x = torch.cat([inputs, hypothesis], dim=1)  # Concatenate inputs with hypothesis
+    def forward(self, inputs, rnn_hxs, masks):
+        x = inputs
 
         if self.is_recurrent:
             x, rnn_hxs = self._forward_gru(x, rnn_hxs, masks)

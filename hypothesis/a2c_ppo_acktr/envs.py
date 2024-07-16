@@ -11,7 +11,6 @@ from stable_baselines3.common.vec_env.vec_normalize import \
     VecNormalize as VecNormalize_
 from minigrid.wrappers import ImgObsWrapper, RGBImgPartialObsWrapper, RGBImgObsWrapper
 from functools import partial
-sys.path.insert(0, '/home/mila/l/lindongy/causal_rl/grid_blicket')
 from multidoorkey_env import MultiDoorKeyEnv
 
 ############### code taken from prioritized level replay but adapted to SB3 ###############

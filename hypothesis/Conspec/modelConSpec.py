@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import sys
-sys.path.insert(0, '/home/mila/l/lindongy/causal_rl/grid_blicket')
 from a2c_ppo_acktr.distributions import Bernoulli, Categorical, DiagGaussian
 from a2c_ppo_acktr.utils import init
 
