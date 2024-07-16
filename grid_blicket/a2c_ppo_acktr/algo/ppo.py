@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-
+from a2c_ppo_acktr.model_hypothesis import Hypothesis_Policy
 
 class PPO():
     def __init__(self,
@@ -31,7 +31,7 @@ class PPO():
 
         self.optimizer = optim.Adam(actor_critic.parameters(), lr=lr, eps=eps)
 
-    def update(self, rollouts):
+    def update(self, rollouts, hypothesis_batch=None):
         advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1]
         advantages = (advantages - advantages.mean()) / (
             advantages.std() + 1e-5)
@@ -54,7 +54,14 @@ class PPO():
                         adv_targ = sample
 
                 # Reshape to do in a single forward pass for all steps
-                values, action_log_probs, dist_entropy, _ = self.actor_critic.evaluate_actions(
+                if hypothesis_batch is not None:
+                    # assert self.actor_critic is an instance of Hypothesis_Policy
+                    assert isinstance(self.actor_critic, Hypothesis_Policy)
+                    values, action_log_probs, dist_entropy, _ = self.actor_critic.evaluate_actions(
+                    obs_batch, hypothesis_batch[0].repeat(obs_batch.shape[0],1), recurrent_hidden_states_batch, masks_batch,
+                    actions_batch)
+                else:
+                    values, action_log_probs, dist_entropy, _ = self.actor_critic.evaluate_actions(
                     obs_batch, recurrent_hidden_states_batch, masks_batch,
                     actions_batch)
 
