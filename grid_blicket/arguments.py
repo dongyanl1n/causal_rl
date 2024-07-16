@@ -180,7 +180,15 @@ def get_args():
         default=0.2,
         help='scale for loss_ortho in loss_conspec')
     
-    
+    ####################################
+    # Arguments pertaining to Hypothesis Testing
+    ####################################
+    # hypothesis
+    parser.add_argument(
+        '--hypothesis',
+        type=str,
+        default='11111111',
+        help='hypothesis to test')
     args = parser.parse_args()
 
     args.cuda = not args.no_cuda and torch.cuda.is_available()
