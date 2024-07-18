@@ -95,14 +95,14 @@ class ConSpec(nn.Module):
             rolling_max, _ = torch.max(rolling_max, dim=0)
             allvaluesdifference = intrinsic_reward - rolling_max
             intrinsic_reward[allvaluesdifference < 0.] = 0.
-            intrinsic_reward[intrinsic_reward < 0.] = 0.
+            # intrinsic_reward[intrinsic_reward < 0.] = 0.
             zero_sum = 0.
             for i in range(roundhalf):
                 temp = torch.roll(intrinsic_reward, i + 1, dims=0) * (.5 ** (i))
                 temp[:i] = 0.
                 zero_sum += temp
             intrinsic_reward -= zero_sum
-            intrinsic_reward[intrinsic_reward < 0.] = 0.
+            # intrinsic_reward[intrinsic_reward < 0.] = 0.
             intrinsic_reward = intrinsic_reward.sum(2)
             '''compute the total reward = intrinsic reward + environment reward'''
             return self.rollouts.calc_total_reward(intrinsic_reward), intrinsic_reward
