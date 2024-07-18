@@ -57,26 +57,25 @@ def main():
     torch.cuda.manual_seed_all(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
-
     #========================= for single wandb job ==============================
-    #wandb.init(project="hypothesis", 
-    #        entity="dongyanl1n", 
-    #        name=f"{args.env_name}-conspec-rec-PO-lr{args.lr}-intrinsicR_scale{args.intrinsicR_scale}-seed{args.seed}",
-    #        dir=os.environ.get('SLURM_TMPDIR', '/network/scratch/l/lindongy/hypothesis'),
-    #        tags=['load_frozenSF_only', '11111111'],
-    #        config=args)
+    wandb.init(project="hypothesis_policy", 
+           entity="dongyanl1n", 
+           name=f"{args.env_name}-conspec-rec-PO-{args.hypothesis}-intrinsR{args.intrinsicR_scale}-seed{args.seed}",
+            tags=[args.hypothesis],
+           dir=os.environ.get('SLURM_TMPDIR', '/scratch/lindongy/hypothesis_policy'),
+           config=args)
     #========================================================================
     
     #========================= for single comet job ==============================
-    # Initialize Comet ML experiment
+    # # Initialize Comet ML experiment
     # experiment = Experiment(
     #     api_key="QeWdbZ4T3xigB5rCZuzGWzh2G",
-    #     project_name="hypothesis_network",
+    #     project_name="hypothesis_policy",
     #     workspace="dongyanl1n"
     # )
 
     # # Set the experiment name
-    # experiment.set_name(f"{args.env_name}-conspec-rec-PO-lr{args.lr}-intrinsicR_scale{args.intrinsicR_scale}-seed{args.seed}")
+    # experiment.set_name(f"{args.env_name}-conspec-rec-PO-lr{args.lr}-intrinsicR_scale{args.intrinsicR_scale}-cos{args.cos_score_threshold}_entropy{args.entropy_coef}_seed{args.seed}")
     
     # # Set the experiment tags
     # experiment.add_tags(['load_frozenSF_only', '11111111'])
@@ -85,14 +84,14 @@ def main():
     # experiment.log_parameters(vars(args))
     
     # # Set the output directory
-    # output_dir = os.environ.get('SLURM_TMPDIR', '/network/scratch/l/lindongy/hypothesis')
+    # output_dir = os.environ.get('SLURM_TMPDIR', '/scratch/lindongy/hypothesis')
     # experiment.log_other('output_dir', output_dir)
     #========================================================================
 
     # create folder for checkpoints
     if args.save_checkpoint:
-        base_directory = "/network/scratch/l/lindongy/hypothesis/conspec_ckpt"
-        subfolder_name = f"{args.env_name}-conspec-rec-PO-lr{args.lr}-intrinsicR_scale{args.intrinsicR_scale}-seed{args.seed}"
+        base_directory = "/scratch/lindongy/hypothesis_policy/conspec_ckpt"
+        subfolder_name = f"{args.env_name}-conspec-rec-PO-{args.hypothesis}-intrinsR{args.intrinsicR_scale}-seed{args.seed}"
         full_path = os.path.join(base_directory, subfolder_name)
         os.makedirs(full_path, exist_ok=True)
     
@@ -116,15 +115,13 @@ def main():
     print('obsspace.shape', obsspace.shape)
     print('actionspace', actionspace)
     print('use_recurrent_policy', args.recurrent_policy)
-
-    # hypothesis = torch.zeros(1, args.num_prototypes).to(device)
-    # hypothesis[0, 0::2] = 1
-    hypothesis = torch.ones(1, args.num_prototypes).to(device)
-    print('hypothesis', hypothesis)
-    if not 0 in hypothesis:
-        print("Using all prototypes. Updating agent with Rit+Ret")
-    else:
-        print("Updating agent with Rit")
+    assert len(args.hypothesis) == args.num_prototypes
+    # turn hypothesis string into a tensor
+    print('args.hypothesis: ', args.hypothesis)
+    if args.hypothesis != '11111111':
+        print("Training agent with intrinsic reward only")
+    hypothesis = torch.cat([torch.tensor([int(i) for i in h]) for h in args.hypothesis]).to(device)
+    hypothesis[hypothesis == 2] = -1
     hypothesis_batch = hypothesis.repeat(args.num_processes, 1)
 
     actor_critic = Hypothesis_Policy(
@@ -134,6 +131,14 @@ def main():
         base_kwargs={'recurrent': args.recurrent_policy,
                      'observation_space': obsspace})
     actor_critic.to(device)
+    # Load actor_critic model weights from policy conditioned on 11111111
+    base_path = args.base_path
+    ckpt_epi = args.ckpt_epi
+    checkpoint_path = os.path.join(base_path, f"model_checkpoint_epoch_{ckpt_epi}.pth")
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    actor_critic.load_state_dict(checkpoint['actor_critic_state_dict'])
+    actor_critic.train()
+    print(f"Loaded actor_critic model from {checkpoint_path}")
 
     if args.algo == 'a2c':
         agent = algo.A2C_ACKTR(
@@ -168,17 +173,11 @@ def main():
 
     ############# Load pretrained model and frozen SF buffer ################
     # Load checkpoints of trained agent
-    base_path = args.base_path
-    ckpt_epi = args.ckpt_epi
-    checkpoint_path = os.path.join(base_path, f"model_checkpoint_epoch_{ckpt_epi}.pth")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-
     conspecfunction.encoder.load_state_dict(checkpoint['encoder_state_dict'])
     conspecfunction.prototypes.prototypes.load_state_dict(checkpoint['prototypes'])
     conspecfunction.prototypes.layers1.load_state_dict(checkpoint['layers1'])
     conspecfunction.prototypes.layers2.load_state_dict(checkpoint['layers2'])
-    load_partial_weights(actor_critic, checkpoint)
-    print(f"Loaded model from {checkpoint_path}")
+    print(f"Loaded conspec model from {checkpoint_path}")
 
     # load frozen SF buffers
     frozen_buffer_path = os.path.join(base_path, f"conspec_rollouts_frozen_epoch_{ckpt_epi}.pth")
@@ -198,14 +197,15 @@ def main():
     rollouts.obs[0].copy_(torch.transpose(obs, 3, 1))
     episode_rewards = deque(maxlen=int(args.num_processes*args.log_interval))
     episode_lengths = deque(maxlen=int(args.num_processes*args.log_interval))
+    ext_rewards = deque(maxlen=int(args.num_processes*args.log_interval))
+    ext_int_rewards = deque(maxlen=int(args.num_processes*args.log_interval))
+    int_rewards = deque(maxlen=int(args.num_processes*args.log_interval))
     
     # num_updates = int(args.num_env_steps) // args.num_steps // args.num_processes  # number of training episodes per environment
     num_updates = args.num_epochs
     print('num_updates', num_updates)
     start = time.time()
     # env_frames = {i: [] for i in range(args.num_processes)}  # to make a video of training
-    ext_rewards = []
-    ext_int_rewards = []
 
     for j in range(num_updates):  # one rollout/episode per update
         obs = envs.reset()
@@ -252,7 +252,9 @@ def main():
                 rollouts.masks[-1]).detach()
             # now compute new rewards
             rewardstotal = rollouts.retrieveR()  # gets extrinsic reward, i.e. rollouts.rewards  # torch.Size([ep_length, num_processes, 1])
-            ext_rewards.append(rewardstotal.sum(0).mean().cpu().detach().numpy())  # sum over time, mean over processes
+            rewardstotal = rewardstotal.sum(0).cpu().detach().squeeze()
+            for i in range(len(rewardstotal)):
+                ext_rewards.append(rewardstotal[i].item())
 
         ###############CONSPEC FUNCTIONS##############################
         '''
@@ -268,11 +270,15 @@ def main():
             # reward_intrinsic_extrinsic, reward_intrinsic = conspecfunction.calc_intrinsic_reward_eq3(hypothesis_batch)
             reward_intrinsic_extrinsic, reward_intrinsic = conspecfunction.calc_intrinsic_reward_v0(prototypes_used=hypothesis)
 
-        ext_int_rewards.append(reward_intrinsic_extrinsic.sum(0).mean().cpu().detach().numpy())  # sum over time, mean over processes
-        if not 0 in hypothesis:  # setting all prototypes to True; means that we care about external reward
-            rollouts.storereward(reward_intrinsic_extrinsic)  # update rollouts.rewards to be reward_intrinsic_extrinsic, i.e. the sum of intrinsic and extrinsic rewards
-        else:
-            rollouts.storereward(reward_intrinsic.unsqueeze(-1))  # update rollouts.rewards to be reward_intrinsic, i.e. the sum of intrinsic and extrinsic rewards
+        rollouts.storereward(reward_intrinsic.unsqueeze(-1))  # update rollouts.rewards to be reward_intrinsic, i.e. the sum of intrinsic and extrinsic rewards
+        
+        # log rewards
+        reward_intrinsic_extrinsic = reward_intrinsic_extrinsic.sum(0).cpu().detach().squeeze()
+        for i in range(len(reward_intrinsic_extrinsic)):
+            ext_int_rewards.append(reward_intrinsic_extrinsic[i].item())
+        reward_intrinsic = reward_intrinsic.sum(0).cpu().detach().squeeze()
+        for i in range(len(reward_intrinsic)):
+            int_rewards.append(reward_intrinsic[i].item())
         ##############################################################
         
         rollouts.compute_returns(next_value, args.use_gae, args.gamma,
@@ -285,30 +291,56 @@ def main():
         if (j % args.log_interval == 0 and len(episode_rewards) > 1) or j == num_updates - 1:
             total_num_steps = (j + 1) * args.num_processes * args.num_steps
             end = time.time()
-            # calculate moving average of ext_rewards and ext_int_rewards to calculate the moving average of intrinsic rewards
-            int_rewards_ema = np.mean(ext_int_rewards[-args.num_processes*args.log_interval:]) - np.mean(ext_rewards[-args.num_processes*args.log_interval:])
             print(f"Updates {j}, num timesteps {total_num_steps}, FPS {int(total_num_steps / (end - start))}")
             print(f'Moving average for episode rewards: {np.mean(episode_rewards):.5f}, for episode length {np.mean(episode_lengths):.5f}')
-            print(f"for external reward: {np.mean(ext_rewards[-args.num_processes*args.log_interval:]):5f}, for ext+int reward: {np.mean(ext_int_rewards[-args.num_processes*args.log_interval:]):5f}, for intrinsic rewards: {int_rewards_ema:.5f}")
+            print(f"for external reward: {np.mean(ext_rewards):5f}, for ext+int reward: {np.mean(ext_int_rewards):5f}, for intrinsic rewards: {np.mean(int_rewards):.5f}")
                   
-            #wandb.log({
-            #    'Epoch': j,
-            #    'total_num_steps': total_num_steps,
-            #    'FPS': int(total_num_steps / (end - start)),
-            #    'mean_reward': np.mean(episode_rewards),
-            #    # 'median_reward': np.median(episode_rewards),
-            #    # 'min_reward': np.min(episode_rewards),
-            #    # 'max_reward': np.max(episode_rewards),
-            #    'mean_length': np.mean(episode_lengths),
-            #    # 'median_length': np.median(episode_lengths),
-            #    # 'min_length': np.min(episode_lengths),
-            #    # 'max_length': np.max(episode_lengths),
-            #    'dist_entropy': dist_entropy,
-            #    'value_loss': value_loss,
-            #    'action_loss': action_loss,
-            #    'intrinsic_reward': int_rewards_ema,
-            #})
-    #wandb.finish()
+            wandb.log({
+               'Epoch': j,
+               'total_num_steps': total_num_steps,
+               'FPS': int(total_num_steps / (end - start)),
+               'mean_reward': np.mean(episode_rewards),
+               # 'median_reward': np.median(episode_rewards),
+               # 'min_reward': np.min(episode_rewards),
+               # 'max_reward': np.max(episode_rewards),
+               'mean_length': np.mean(episode_lengths),
+               # 'median_length': np.median(episode_lengths),
+               # 'min_length': np.min(episode_lengths),
+               # 'max_length': np.max(episode_lengths),
+               'dist_entropy': dist_entropy,
+               'value_loss': value_loss,
+               'action_loss': action_loss,
+               'intrinsic_reward': np.mean(int_rewards),
+            })
+        
+        # save checkpoint
+        if args.save_checkpoint and j == num_updates - 1:
+                buffer = {
+                    'obs': rollouts.obs,
+                    'rewards': rollouts.rewards,
+                    'hidden_states': rollouts.recurrent_hidden_states,
+                    'actions': rollouts.actions,
+                    'masks': rollouts.masks,
+                    'bad_masks': rollouts.bad_masks,
+                    'value_preds': rollouts.value_preds,
+                }
+                model_checkpoint = {
+                    'epoch': j,
+                    'actor_critic_state_dict': actor_critic.state_dict(),
+                    'optimizer_ppo_state_dict': agent.optimizer.state_dict(),
+                    }
+                        
+                print(f'saving checkpoints for epoch {j}...')
+                checkpoint_path = os.path.join(full_path, f'model_checkpoint_epoch_{j}.pth')
+                buffer_path = os.path.join(full_path, f'buffer_epoch_{j}.pth')
+
+                torch.save(model_checkpoint, checkpoint_path)
+                print('model checkpoint saved')
+
+                torch.save(buffer, buffer_path)
+                print('buffer saved')
+            
+    wandb.finish()
     #         experiment.log_metrics({
     #             'Epoch': j,
     #             'total_num_steps': total_num_steps,
@@ -318,7 +350,7 @@ def main():
     #             'dist_entropy': dist_entropy,
     #             'value_loss': value_loss,
     #             'action_loss': action_loss,
-    #             'intrinsic_reward': int_rewards_ema,
+    #             'intrinsic_reward': int_rewards,
     #         }, step=total_num_steps)
     # experiment.end()
     
