@@ -113,7 +113,7 @@ class ConSpec(nn.Module):
             intrinsic_reward[intrinsic_reward < 0.] = 0.
             intrinsic_reward = intrinsic_reward.sum(2)
             '''compute the total reward = intrinsic reward + environment reward'''
-            return self.rollouts.calc_total_reward(intrinsic_reward)
+            return self.rollouts.calc_total_reward(intrinsic_reward), intrinsic_reward
 
     def update_conspec(self):
         '''trains the ConSpec module'''
@@ -154,8 +154,6 @@ class ConSpec(nn.Module):
                 if count_prototypes_timesteps_criterion[i] > self.freeze_prototype_steps and prototypes_used[i] < 0.1:
                     prototypes_used[i] = 1.
                     self.rollouts.store_frozen_SF(i)
-            print('prototypes used', prototypes_used)
-            print('count_prototypes_timesteps_criterion', count_prototypes_timesteps_criterion)
             self.optimizerConSpec.zero_grad()
             costCL.backward()
             self.optimizerConSpec.step()
@@ -166,8 +164,8 @@ class ConSpec(nn.Module):
     def do_everything(self, obstotal,  recurrent_hidden_statestotal, actiontotal,rewardtotal, maskstotal):
         '''function for doing all the required conspec functions above, in order'''
         self.store_memories(obstotal, recurrent_hidden_statestotal, actiontotal, rewardtotal, maskstotal)  # store in main buffer and pos/neg buffer
-        rewardtotal_intrisic_extrinsic = self.calc_intrinsic_reward()
+        rewardtotal_intrisic_extrinsic, reward_intrinsic = self.calc_intrinsic_reward()
         loss_conspec = self.update_conspec()
-        return rewardtotal_intrisic_extrinsic, loss_conspec
+        return rewardtotal_intrisic_extrinsic, reward_intrinsic, loss_conspec
     
 

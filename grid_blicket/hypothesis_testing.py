@@ -1,3 +1,6 @@
+'''
+Train all-1-conditioned policy with ConSpec on task.
+'''
 import os
 import time
 from collections import deque
@@ -52,13 +55,14 @@ def main():
     wandb.init(project="hypothesis_policy", 
             entity="dongyanl1n", 
             name=f"{args.env_name}-conspec-rec-PO-{args.hypothesis}-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-seed{args.seed}",
-            dir=os.environ.get('SLURM_TMPDIR', '/network/scratch/l/lindongy/hypothesis_policy'),
+            tags=[args.hypothesis],
+            dir=os.environ.get('SLURM_TMPDIR', '/scratch/lindongy/hypothesis_policy'),
             config=args)
     #========================================================================
 
     # create folder for checkpoints
     if args.save_checkpoint:
-        base_directory = "/network/scratch/l/lindongy/hypothesis_policy/conspec_ckpt"
+        base_directory = "/scratch/lindongy/hypothesis_policy/conspec_ckpt"
         subfolder_name = f"{args.env_name}-conspec-rec-PO-{args.hypothesis}-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-seed{args.seed}"
         full_path = os.path.join(base_directory, subfolder_name)
         os.makedirs(full_path, exist_ok=True)
@@ -137,14 +141,13 @@ def main():
     episode_rewards = deque(maxlen=int(args.num_processes*args.log_interval))
     episode_lengths = deque(maxlen=int(args.num_processes*args.log_interval))
     loss_conspec_list = deque(maxlen=int(args.num_processes*args.log_interval))
+    int_rewards = deque(maxlen=int(args.num_processes*args.log_interval))
     
     # num_updates = int(args.num_env_steps) // max_steps // args.num_processes  # number of training episodes per environment
     num_updates = args.num_epochs
     print('num_updates', num_updates)
     start = time.time()
     # env_frames = {i: [] for i in range(args.num_processes)}  # to make a video of training
-    ext_rewards = []
-    ext_int_rewards = []
 
     for j in range(num_updates):  # one rollout/episode per update
         obs = envs.reset()
@@ -191,7 +194,6 @@ def main():
                 rollouts.masks[-1]).detach()
             # now compute new rewards
             rewardstotal = rollouts.retrieveR()  # gets extrinsic reward, i.e. rollouts.rewards  # torch.Size([ep_length, num_processes, 1])
-            ext_rewards.append(rewardstotal.sum(0).mean().cpu().detach().numpy())  # sum over time, mean over processes
 
         ###############CONSPEC FUNCTIONS##############################
         '''
@@ -202,11 +204,15 @@ def main():
         '''
         obstotal, rewardtotal, recurrent_hidden_statestotal, actiontotal,  maskstotal  = rollouts.release()
 
-        reward_intrinsic_extrinsic, loss_conspec  = conspecfunction.do_everything(obstotal, recurrent_hidden_statestotal, actiontotal, rewardtotal, maskstotal)
+        reward_intrinsic_extrinsic, reward_intrinsic, loss_conspec  = conspecfunction.do_everything(obstotal, recurrent_hidden_statestotal, actiontotal, rewardtotal, maskstotal)
         if type(loss_conspec) != int:  # loss_conspec is 0 if there's no success trajectory, and conspec does not get updated
             loss_conspec_list.append(loss_conspec.cpu().detach().numpy())
-        ext_int_rewards.append(reward_intrinsic_extrinsic.sum(0).mean().cpu().detach().numpy())  # sum over time, mean over processes
         rollouts.storereward(reward_intrinsic_extrinsic)  # update rollouts.rewards to be reward_intrinsic_extrinsic, i.e. the sum of intrinsic and extrinsic rewards
+        
+        # log rewards
+        reward_intrinsic = reward_intrinsic.sum(0).cpu().detach().squeeze()
+        for i in range(len(reward_intrinsic)):
+            int_rewards.append(reward_intrinsic[i].item())
         ##############################################################
         
         rollouts.compute_returns(next_value, args.use_gae, args.gamma,
@@ -223,11 +229,9 @@ def main():
         if (j % args.log_interval == 0 and len(episode_rewards) > 1) or j == num_updates - 1:
             total_num_steps = (j + 1) * args.num_processes * max_steps
             end = time.time()
-            # calculate moving average of ext_rewards and ext_int_rewards to calculate the moving average of intrinsic rewards
-            int_rewards_ema = np.mean(ext_int_rewards[-args.num_processes*args.log_interval:]) - np.mean(ext_rewards[-args.num_processes*args.log_interval:])
-            # print(f"Updates {j}, num timesteps {total_num_steps}, FPS {int(total_num_steps / (end - start))}")
-            print(f'Updates {j}, Moving average for external rewards: {np.mean(episode_rewards):.5f}, for episode length {np.mean(episode_lengths):.5f}, for intrinsic rewards: {int_rewards_ema:.1f}')
-            # print(f'Losses: value {value_loss:.5f}, action {action_loss:.5f}, entropy {dist_entropy:.5f}, ConSpec {np.mean(loss_conspec_list):.5f}')
+            print(f"Updates {j}, num timesteps {total_num_steps}, FPS {int(total_num_steps / (end - start))}")
+            print(f'Moving average for external rewards: {np.mean(episode_rewards):.5f}, for episode length {np.mean(episode_lengths):.5f}, for intrinsic rewards: {np.mean(int_rewards):.5f}')
+            print(f'Losses: value {value_loss:.5f}, action {action_loss:.5f}, entropy {dist_entropy:.5f}, ConSpec {np.mean(loss_conspec_list):.5f}')
             print(f'ConSpec prototypes used: {conspecfunction.rollouts.prototypesUsed}, timestep count: {conspecfunction.rollouts.count_prototypes_timesteps_criterion}')
             
             wandb.log({
@@ -245,7 +249,7 @@ def main():
                 'dist_entropy': dist_entropy,
                 'value_loss': value_loss,
                 'action_loss': action_loss,
-                'intrinsic_reward': int_rewards_ema,
+                'intrinsic_reward': np.mean(int_rewards),
                 'loss_conspec': np.mean(loss_conspec_list),
                 'good_performance_counter': good_performance_counter,
             })

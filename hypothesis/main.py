@@ -1,3 +1,6 @@
+'''
+Load pretrained all-1-conditioned policy and pretrained ConSpec, and train hypothesis-conditioned policy with intrinsic reward only.
+'''
 import os
 import time
 from collections import deque
@@ -252,9 +255,6 @@ def main():
                 rollouts.masks[-1]).detach()
             # now compute new rewards
             rewardstotal = rollouts.retrieveR()  # gets extrinsic reward, i.e. rollouts.rewards  # torch.Size([ep_length, num_processes, 1])
-            rewardstotal = rewardstotal.sum(0).cpu().detach().squeeze()
-            for i in range(len(rewardstotal)):
-                ext_rewards.append(rewardstotal[i].item())
 
         ###############CONSPEC FUNCTIONS##############################
         '''
@@ -273,9 +273,6 @@ def main():
         rollouts.storereward(reward_intrinsic.unsqueeze(-1))  # update rollouts.rewards to be reward_intrinsic, i.e. the sum of intrinsic and extrinsic rewards
         
         # log rewards
-        reward_intrinsic_extrinsic = reward_intrinsic_extrinsic.sum(0).cpu().detach().squeeze()
-        for i in range(len(reward_intrinsic_extrinsic)):
-            ext_int_rewards.append(reward_intrinsic_extrinsic[i].item())
         reward_intrinsic = reward_intrinsic.sum(0).cpu().detach().squeeze()
         for i in range(len(reward_intrinsic)):
             int_rewards.append(reward_intrinsic[i].item())
@@ -292,8 +289,7 @@ def main():
             total_num_steps = (j + 1) * args.num_processes * args.num_steps
             end = time.time()
             print(f"Updates {j}, num timesteps {total_num_steps}, FPS {int(total_num_steps / (end - start))}")
-            print(f'Moving average for episode rewards: {np.mean(episode_rewards):.5f}, for episode length {np.mean(episode_lengths):.5f}')
-            print(f"for external reward: {np.mean(ext_rewards):5f}, for ext+int reward: {np.mean(ext_int_rewards):5f}, for intrinsic rewards: {np.mean(int_rewards):.5f}")
+            print(f"Moving average for episode rewards: {np.mean(episode_rewards):.5f}, for episode length {np.mean(episode_lengths):.5f}, for intrinsic rewards: {np.mean(int_rewards):.5f}")
                   
             wandb.log({
                'Epoch': j,
