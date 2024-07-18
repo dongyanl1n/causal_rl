@@ -170,13 +170,22 @@ def get_args():
     parser.add_argument(
         '--base_path',
         type=str,
-        default='/network/scratch/l/lindongy/grid_blickets/conspec_ckpt/MultiDoorKeyEnv-6x6-2keys-v0-conspec-rec-PO-lr0.0006-intrinsR0.1-lrConSpec0.01-entropy0.02-num_mini_batch4-seed1',
+        default='/scratch/lindongy/hypothesis_policy/conspec_ckpt/MultiDoorKeyEnv-6x6-2keys-v0-conspec-rec-PO-11111111-lr0.0009-intrinsR0.1-lrConSpec0.007-entropy0.02-seed4',
         help='path to the pretrained Conspec model')
     parser.add_argument(
         '--ckpt_epi',
         type=int,
-        default=3399,
+        default=7299,
         help='episode number of the pretrained Conspec model')
+    ####################################
+    # Arguments pertaining to Hypothesis Testing
+    ####################################
+    # hypothesis
+    parser.add_argument(
+        '--hypothesis',
+        type=str,
+        default='11111111',
+        help='hypothesis to test')
     
     args = parser.parse_args()
 
