@@ -11,22 +11,6 @@ from tqdm import tqdm
 import imageio
 from minigrid.core.constants import TILE_PIXELS, COLORS, COLOR_NAMES, COLOR_TO_IDX, IDX_TO_COLOR, OBJECT_TO_IDX, IDX_TO_OBJECT, STATE_TO_IDX
 
-def plot_cos_scores(cos_scores, dir_path):
-    # cos_scores: len_epi, n_rollouts, n_prototypes
-    # for each prototype, plot the cosine similarity scores over len_epi. one curve per rollout
-    n_prototypes = cos_scores.shape[2]
-    n_rollouts = cos_scores.shape[1]
-    len_epi = cos_scores.shape[0]
-    for i in range(n_prototypes):
-        plt.figure()
-        for j in range(n_rollouts):
-            plt.plot(cos_scores[:, j, i], label=f'rollout_{j}')
-        plt.title(f'Prototype {i}')
-        plt.xlabel('Time in episode')
-        plt.ylabel('cosine similarity')
-        plt.legend()
-        plt.savefig(os.path.join(dir_path, f'prototype_{i}_cos_scores.png'))
-
 def render_tile(ax, pos, object_idx, color_idx, state):
     """
     Renders a single tile at the given position in the given Axes object.
@@ -150,16 +134,20 @@ def plot_high_cos_obs(cos_scores, obs_batch, threshold, save_path=None):
     
     Args:
     cos_scores: numpy array of shape (len_episode, num_rollouts, num_prototype) containing cosine similarity scores
-    obs_batch: numpy array of shape (len_episode, num_rollouts, num_prototype, 3, 7, 7) containing abstract observations of shape (3, 7, 7)
+    obs_batch: numpy array of shape (len_episode, num_rollouts, 3, 7, 7) containing abstract observations of shape (3, 7, 7)
     threshold: float, the threshold above which to consider a cosine similarity score as high
     save_path: Optional; if provided, the path where the images will be saved
     """
+    cos_scores = cos_scores.detach().cpu().numpy()
+    obs_batch = obs_batch.detach().cpu().numpy()
     len_episode, num_rollouts, num_prototype = cos_scores.shape
     
     for p in range(num_prototype):
         # Count the maximum number of high cosine similarity scores for any rollout
         max_high_cos = max(np.sum(cos_scores[:, r, p] > threshold) for r in range(num_rollouts))
-        
+        if max_high_cos == 0:
+            print(f"No high cosine similarity scores for Prototype {p+1}")
+            continue
         # Create a figure with a row for each rollout
         fig = plt.figure(figsize=(4 * max_high_cos, 4 * num_rollouts))
         gs = GridSpec(num_rollouts, max_high_cos, figure=fig)
@@ -169,7 +157,7 @@ def plot_high_cos_obs(cos_scores, obs_batch, threshold, save_path=None):
             
             for i, idx in enumerate(high_cos_indices):
                 ax = fig.add_subplot(gs[r, i])
-                obs_image = render_obs(obs_batch[idx, r, p])
+                obs_image = render_obs(obs_batch[idx, r])
                 obs_image_rgb = cv2.cvtColor(obs_image, cv2.COLOR_BGR2RGB)
                 ax.imshow(obs_image_rgb)
                 ax.axis('off')
@@ -186,6 +174,3 @@ def plot_high_cos_obs(cos_scores, obs_batch, threshold, save_path=None):
         if save_path:
             plt.savefig(os.path.join(save_path, f'prototype_{p+1}.png'), bbox_inches='tight', dpi=300)
             print(f"Image for Prototype {p+1} saved to {os.path.join(save_path, f'prototype_{p+1}.png')}")
-        
-        # plt.show()
-        # plt.close()
