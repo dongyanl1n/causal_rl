@@ -18,7 +18,9 @@ from multidoorkey_env import MultiDoorKeyEnv
 # Assuming MultiDoorKeyEnv is defined elsewhere
 # from your_module import MultiDoorKeyEnv
 
-def get_env_max_steps(env_name):
+def get_env_max_steps(env_name, max_steps=None):
+    if max_steps is not None:
+        return max_steps
     if env_name.startswith("MiniGrid"):
         return gym.make(env_name).max_steps
     elif env_name.startswith("MultiDoorKeyEnv"):
@@ -30,12 +32,12 @@ def get_env_max_steps(env_name):
         raise ValueError(f"Unknown MiniGrid-based environment {env_name}")
 
 class VecMinigrid(SubprocVecEnv):
-    def __init__(self, num_envs, env_name, goal_pos=None, fixed_positions=True, fully_observed=False):
-        env_fn = [partial(self._make_minigrid_env, env_name, goal_pos, fixed_positions, fully_observed) for _ in range(num_envs)]
+    def __init__(self, num_envs, env_name, goal_pos=None, fixed_positions=True, fully_observed=False, max_steps=None):
+        env_fn = [partial(self._make_minigrid_env, env_name, goal_pos, fixed_positions, fully_observed, max_steps) for _ in range(num_envs)]
         super().__init__(env_fn)
 
     @staticmethod
-    def _make_minigrid_env(env_name, goal_pos=None, fixed_positions=True, fully_observed=False):
+    def _make_minigrid_env(env_name, goal_pos=None, fixed_positions=True, fully_observed=False, max_steps=None):
         if env_name.startswith("MiniGrid"):
             if env_name == "MiniGrid-FourRooms-v0" and goal_pos is not None:
                 env = gym.make(env_name, goal_pos=goal_pos)
@@ -45,7 +47,7 @@ class VecMinigrid(SubprocVecEnv):
             _, size, n_keys, _ = env_name.split('-')
             size = int(size.split('x')[0])
             n_keys = int(n_keys.split('keys')[0])
-            env = MultiDoorKeyEnv(n_keys=n_keys, size=size, fixed_positions=fixed_positions)
+            env = MultiDoorKeyEnv(n_keys=n_keys, size=size, fixed_positions=fixed_positions, max_steps=max_steps)
         else:
             raise ValueError(f"Unknown MiniGrid-based environment {env_name}")
 
@@ -77,13 +79,13 @@ class VecPyTorchMinigrid(VecEnvWrapper):
         reward = torch.from_numpy(reward).unsqueeze(dim=1).float()
         return obs, reward, done, info
 
-def make_minigrid_envs(num_envs, env_name, device, goal_pos=None, fixed_positions=True, fully_observed=False, **kwargs):
+def make_minigrid_envs(num_envs, env_name, device, goal_pos=None, fixed_positions=True, fully_observed=False, max_steps=None, **kwargs):
     ret_normalization = not kwargs.get('no_ret_normalization', False)
-    venv = VecMinigrid(num_envs, env_name, goal_pos, fixed_positions, fully_observed)
+    venv = VecMinigrid(num_envs, env_name, goal_pos, fixed_positions, fully_observed, max_steps)
     venv = VecMonitor(venv=venv, filename=None)
     venv = VecNormalize(venv=venv, norm_obs=False, norm_reward=ret_normalization)
     envs = VecPyTorchMinigrid(venv, device)
-    return envs, get_env_max_steps(env_name)
+    return envs, get_env_max_steps(env_name, max_steps)
 
 ############################################################
 

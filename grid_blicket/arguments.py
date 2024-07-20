@@ -133,6 +133,11 @@ def get_args():
         '--fully_observed', 
         action='store_true', 
         help='Use fully observed wrapper for the environment')
+    parser.add_argument(
+        '--max_steps', 
+        type=int, 
+        default=None, 
+        help='Maximum number of steps per episode')
 
 
     ####################################

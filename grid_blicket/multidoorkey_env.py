@@ -14,7 +14,7 @@ class MultiDoorKeyEnv(MiniGridEnv):
                 agent_start_pos=(1, 1),
                 agent_start_dir=0,
                 n_keys=1,
-                max_steps: int = None,
+                max_steps=None,
                 fixed_positions=False,  # If True, the key and door positions are fixed during env.reset()
                 **kwargs,
                 ):        
