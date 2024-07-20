@@ -53,7 +53,7 @@ def main():
     #========================= for single wandb job ==============================
     wandb.init(project="grid_blicket_env", 
             entity="dongyanl1n", 
-            name=f"{args.env_name}-conspec-rec-PO-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-num_mini_batch{args.num_mini_batch}-seed{args.seed}",
+            name=f"{args.env_name}-conspec-rec-{'FO' if args.fully_observed else 'PO'}-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-num_mini_batch{args.num_mini_batch}-seed{args.seed}",
             dir=os.environ.get('SLURM_TMPDIR', '/network/scratch/l/lindongy/grid_blickets'),
             config=args)
     #========================================================================
@@ -61,7 +61,7 @@ def main():
     # create folder for checkpoints
     if args.save_checkpoint:
         base_directory = "/network/scratch/l/lindongy/grid_blickets/conspec_ckpt"
-        subfolder_name = f"{args.env_name}-conspec-rec-PO-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-num_mini_batch{args.num_mini_batch}-seed{args.seed}"
+        subfolder_name = f"{args.env_name}-conspec-rec-{'FO' if args.fully_observed else 'PO'}-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-num_mini_batch{args.num_mini_batch}-seed{args.seed}"
         full_path = os.path.join(base_directory, subfolder_name)
         os.makedirs(full_path, exist_ok=True)
 
@@ -77,11 +77,13 @@ def main():
         env_name=args.env_name,
         device=device,
         fixed_positions=args.fixed_positions,
+        fully_observed=args.fully_observed,
         no_ret_normalization=True
         )
     args.num_steps = max_steps
     obsspace = envs.observation_space
     actionspace = envs.action_space
+    print(f"using {'full observability' if args.fully_observed else 'partial observability'}")
     print('obsspace.shape', obsspace.shape)
     print('actionspace', actionspace)
     print('use_recurrent_policy', args.recurrent_policy)

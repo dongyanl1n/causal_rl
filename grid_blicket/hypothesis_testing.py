@@ -54,7 +54,7 @@ def main():
     #========================= for single wandb job ==============================
     wandb.init(project="hypothesis_policy", 
             entity="dongyanl1n", 
-            name=f"{args.env_name}-conspec-rec-PO-{args.hypothesis}-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-seed{args.seed}",
+            name=f"{args.env_name}-conspec-rec-{'FO' if args.fully_observed else 'PO'}-{args.hypothesis}-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-seed{args.seed}",
             tags=[args.hypothesis],
             dir=os.environ.get('SLURM_TMPDIR', '/scratch/lindongy/hypothesis_policy'),
             config=args)
@@ -63,7 +63,7 @@ def main():
     # create folder for checkpoints
     if args.save_checkpoint:
         base_directory = "/scratch/lindongy/hypothesis_policy/conspec_ckpt"
-        subfolder_name = f"{args.env_name}-conspec-rec-PO-{args.hypothesis}-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-seed{args.seed}"
+        subfolder_name = f"{args.env_name}-conspec-rec-{'FO' if args.fully_observed else 'PO'}-{args.hypothesis}-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-seed{args.seed}"
         full_path = os.path.join(base_directory, subfolder_name)
         os.makedirs(full_path, exist_ok=True)
 
@@ -79,11 +79,13 @@ def main():
         env_name=args.env_name,
         device=device,
         fixed_positions=args.fixed_positions,
+        fully_observed=args.fully_observed,
         no_ret_normalization=True
         )
     args.num_steps = max_steps
     obsspace = envs.observation_space
     actionspace = envs.action_space
+    print(f"using {'full observability' if args.fully_observed else 'partial observability'}")
     print('obsspace.shape', obsspace.shape)
     print('actionspace', actionspace)
     print('use_recurrent_policy', args.recurrent_policy)
