@@ -9,7 +9,7 @@ from stable_baselines3.common.vec_env import (DummyVecEnv, SubprocVecEnv,
                                               VecEnvWrapper, VecMonitor, VecNormalize)
 from stable_baselines3.common.vec_env.vec_normalize import \
     VecNormalize as VecNormalize_
-from minigrid.wrappers import ImgObsWrapper, RGBImgPartialObsWrapper, RGBImgObsWrapper
+from minigrid.wrappers import ImgObsWrapper, FullyObsWrapper
 from functools import partial
 sys.path.insert(0, '/home/mila/l/lindongy/causal_rl/grid_blicket')
 from multidoorkey_env import MultiDoorKeyEnv
@@ -30,12 +30,12 @@ def get_env_max_steps(env_name):
         raise ValueError(f"Unknown MiniGrid-based environment {env_name}")
 
 class VecMinigrid(SubprocVecEnv):
-    def __init__(self, num_envs, env_name, goal_pos=None, fixed_positions=True):
-        env_fn = [partial(self._make_minigrid_env, env_name, goal_pos, fixed_positions) for _ in range(num_envs)]
+    def __init__(self, num_envs, env_name, goal_pos=None, fixed_positions=True, fully_observed=False):
+        env_fn = [partial(self._make_minigrid_env, env_name, goal_pos, fixed_positions, fully_observed) for _ in range(num_envs)]
         super().__init__(env_fn)
 
     @staticmethod
-    def _make_minigrid_env(env_name, goal_pos=None, fixed_positions=True):
+    def _make_minigrid_env(env_name, goal_pos=None, fixed_positions=True, fully_observed=False):
         if env_name.startswith("MiniGrid"):
             if env_name == "MiniGrid-FourRooms-v0" and goal_pos is not None:
                 env = gym.make(env_name, goal_pos=goal_pos)
@@ -49,6 +49,9 @@ class VecMinigrid(SubprocVecEnv):
         else:
             raise ValueError(f"Unknown MiniGrid-based environment {env_name}")
 
+        if fully_observed:
+            env = FullyObsWrapper(env)
+    
         env = ImgObsWrapper(env)
         return env
 
@@ -74,9 +77,9 @@ class VecPyTorchMinigrid(VecEnvWrapper):
         reward = torch.from_numpy(reward).unsqueeze(dim=1).float()
         return obs, reward, done, info
 
-def make_minigrid_envs(num_envs, env_name, device, goal_pos=None, fixed_positions=True, **kwargs):
+def make_minigrid_envs(num_envs, env_name, device, goal_pos=None, fixed_positions=True, fully_observed=False, **kwargs):
     ret_normalization = not kwargs.get('no_ret_normalization', False)
-    venv = VecMinigrid(num_envs, env_name, goal_pos, fixed_positions)
+    venv = VecMinigrid(num_envs, env_name, goal_pos, fixed_positions, fully_observed)
     venv = VecMonitor(venv=venv, filename=None)
     venv = VecNormalize(venv=venv, norm_obs=False, norm_reward=ret_normalization)
     envs = VecPyTorchMinigrid(venv, device)

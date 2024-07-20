@@ -129,6 +129,10 @@ def get_args():
         default=False,
         action='store_true',
         help='Whether to keep key and door positions fixed across resets')
+    parser.add_argument(
+        '--fully_observed', 
+        action='store_true', 
+        help='Use fully observed wrapper for the environment')
 
 
     ####################################
