@@ -78,6 +78,7 @@ def main():
         device=device,
         fixed_positions=args.fixed_positions,
         fully_observed=args.fully_observed,
+        max_steps=args.max_steps,
         no_ret_normalization=True
         )
     args.num_steps = max_steps
