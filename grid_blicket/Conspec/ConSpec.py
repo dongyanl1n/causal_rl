@@ -46,7 +46,7 @@ class ConSpec(nn.Module):
         self.num_procs = args.num_processes
         self.num_prototypes = args.num_prototypes
         self.seed = args.seed
-        self.rollouts = RolloutStorage(args.num_steps, self.num_procs, obsspace.shape,
+        self.rollouts = RolloutStorage(args.max_episode_steps, self.num_procs, obsspace.shape,
                               self.encoder.recurrent_hidden_state_size, self.num_prototypes, args.SF_buffer_size)
         self.prototypes = prototypes(input_size=self.encoder.recurrent_hidden_state_size, hidden_size=1010, 
                                      num_prototypes=self.num_prototypes, device=device)
