@@ -1,0 +1,3 @@
+[submodule "grid_blicket/Miniworld"]
+	path = grid_blicket/Miniworld
+	url = https://github.com/Farama-Foundation/Miniworld
