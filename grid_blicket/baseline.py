@@ -10,7 +10,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import random
 from a2c_ppo_acktr import algo, utils
-from a2c_ppo_acktr.envs import make_minigrid_envs
+from a2c_ppo_acktr.envs import make_vec_envs
 from a2c_ppo_acktr.model import Policy  # taken from ConSpec repo's a2c_ppo_acktr/modelRL.py
 from a2c_ppo_acktr.storage import RolloutStorage  # taken from ConSpec repo's a2c_ppo_acktr/storage.py
 from arguments import get_args
@@ -29,10 +29,10 @@ def main():
     random.seed(args.seed)
 
     #=========== for single wandb job ===========
-    wandb.init(project="grid_blicket_env", 
+    wandb.init(project="blicket_objects_env", 
             entity="dongyanl1n", 
-            name=f"{args.env_name}-ppo{'-rec' if args.recurrent_policy else ''}-PO-lr{args.lr}-seed{args.seed}",
-            dir="/network/scratch/l/lindongy/grid_blickets",
+            name=f"{args.env_name}-ppo{'-rec' if args.recurrent_policy else ''}-lr{args.lr}-seed{args.seed}",
+            dir="/network/scratch/l/lindongy/blicket_objects_env/baseline",
             config=args)
     #============================================
 
@@ -43,14 +43,11 @@ def main():
     torch.set_num_threads(1)
     device = torch.device("cuda:0" if args.cuda else "cpu")
 
-    envs, max_steps = make_minigrid_envs(
-        num_envs=args.num_processes,
-        env_name=args.env_name,
-        device=device,
-        fixed_positions=args.fixed_positions,
-        no_ret_normalization=True
-        )
-    args.num_steps = max_steps
+    envs = make_vec_envs(args.env_name, args.seed, args.num_processes,
+                     args.gamma, args.log_dir, device, True,
+                     max_episode_steps=args.max_episode_steps,
+                     size=args.env_size)
+    max_steps = args.max_episode_steps
     obsspace = envs.observation_space
     actionspace = envs.action_space
     print('obsspace.shape', obsspace.shape)
@@ -99,7 +96,7 @@ def main():
                               actor_critic.recurrent_hidden_state_size)
     rollouts.to(device)
     obs = envs.reset()
-    rollouts.obs[0].copy_(torch.transpose(obs, 3, 1))
+    rollouts.obs[0].copy_(obs)
     episode_rewards = deque(maxlen=int(args.num_processes*args.log_interval))
     episode_lengths = deque(maxlen=int(args.num_processes*args.log_interval))
 
@@ -111,7 +108,7 @@ def main():
 
     for j in range(num_updates):  # one rollout/episode per update
         obs = envs.reset()
-        rollouts.obs[0].copy_(torch.transpose(obs, 3, 1))
+        rollouts.obs[0].copy_(obs)
         if args.use_linear_lr_decay:
             # decrease learning rate linearly
             utils.update_linear_schedule(
@@ -139,7 +136,7 @@ def main():
             bad_masks = torch.FloatTensor(
                 [[0.0] if 'bad_transition' in info.keys() else [1.0]
                  for info in infos])
-            rollouts.insert(torch.transpose(obs, 3, 1), recurrent_hidden_states, action,
+            rollouts.insert(obs, recurrent_hidden_states, action,
                             action_log_prob, value, reward, masks, bad_masks)
 
             # for i in range(args.num_processes):

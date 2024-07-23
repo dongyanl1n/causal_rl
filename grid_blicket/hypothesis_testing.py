@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import random
 from a2c_ppo_acktr import algo, utils
-from a2c_ppo_acktr.envs import make_minigrid_envs
+from a2c_ppo_acktr.envs import make_vec_envs
 from a2c_ppo_acktr.model_hypothesis import Hypothesis_Policy
 from a2c_ppo_acktr.storage import RolloutStorage  # taken from ConSpec repo's a2c_ppo_acktr/storage.py
 from arguments import get_args
@@ -52,18 +52,18 @@ def main():
     #========================================================================
 
     #========================= for single wandb job ==============================
-    wandb.init(project="hypothesis_policy", 
+    wandb.init(project="blicket_objects_env", 
             entity="dongyanl1n", 
-            name=f"{args.env_name}-conspec-rec-{'FO' if args.fully_observed else 'PO'}-{args.hypothesis}-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-seed{args.seed}",
+            name=f"{args.env_name}-conspec{'-rec' if args.recurrent_policy else ''}-{args.hypothesis}-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-seed{args.seed}",
             tags=[args.hypothesis],
-            dir=os.environ.get('SLURM_TMPDIR', '/scratch/lindongy/hypothesis_policy'),
+            dir=os.environ.get('SLURM_TMPDIR', '/network/scratch/l/lindongy/blicket_objects_env/hypothesis_policy'),
             config=args)
     #========================================================================
 
     # create folder for checkpoints
     if args.save_checkpoint:
-        base_directory = "/scratch/lindongy/hypothesis_policy/conspec_ckpt"
-        subfolder_name = f"{args.env_name}-conspec-rec-{'FO' if args.fully_observed else 'PO'}-{args.hypothesis}-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-seed{args.seed}"
+        base_directory = "/scratch/lindongy/blicket_objects_env/hypothesis_policy/conspec_ckpt"
+        subfolder_name = f"{args.env_name}-conspec{'-rec' if args.recurrent_policy else ''}-{args.hypothesis}-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-seed{args.seed}"
         full_path = os.path.join(base_directory, subfolder_name)
         os.makedirs(full_path, exist_ok=True)
 
@@ -74,19 +74,13 @@ def main():
     torch.set_num_threads(1)
     device = torch.device("cuda:0" if args.cuda else "cpu")
 
-    envs, max_steps = make_minigrid_envs(
-        num_envs=args.num_processes,
-        env_name=args.env_name,
-        device=device,
-        fixed_positions=args.fixed_positions,
-        fully_observed=args.fully_observed,
-        max_steps=args.max_steps,
-        no_ret_normalization=True
-        )
-    args.num_steps = max_steps
+    envs = make_vec_envs(args.env_name, args.seed, args.num_processes,
+                     args.gamma, args.log_dir, device, True,
+                     max_episode_steps=args.max_episode_steps,
+                     size=args.env_size)
+    max_steps = args.max_episode_steps
     obsspace = envs.observation_space
     actionspace = envs.action_space
-    print(f"using {'full observability' if args.fully_observed else 'partial observability'}")
     print('obsspace.shape', obsspace.shape)
     print('actionspace', actionspace)
     print('use_recurrent_policy', args.recurrent_policy)
@@ -140,7 +134,7 @@ def main():
                               actor_critic.recurrent_hidden_state_size)
     rollouts.to(device)
     obs = envs.reset()
-    rollouts.obs[0].copy_(torch.transpose(obs, 3, 1))
+    rollouts.obs[0].copy_(obs)
     episode_rewards = deque(maxlen=int(args.num_processes*args.log_interval))
     episode_lengths = deque(maxlen=int(args.num_processes*args.log_interval))
     loss_conspec_list = deque(maxlen=int(args.num_processes*args.log_interval))
@@ -154,7 +148,7 @@ def main():
 
     for j in range(num_updates):  # one rollout/episode per update
         obs = envs.reset()
-        rollouts.obs[0].copy_(torch.transpose(obs, 3, 1))
+        rollouts.obs[0].copy_(obs)
         if args.use_linear_lr_decay:
             # decrease learning rate linearly
             utils.update_linear_schedule(
@@ -180,7 +174,7 @@ def main():
             masks = torch.FloatTensor(
                 [[0.0] if done_ else [1.0] for done_ in done])
             bad_masks = masks
-            rollouts.insert(torch.transpose(obs, 3, 1), recurrent_hidden_states, action,
+            rollouts.insert(obs, recurrent_hidden_states, action,
                             action_log_prob, value, reward, masks, bad_masks)
 
             # for i in range(args.num_processes):
