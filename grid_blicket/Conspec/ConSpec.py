@@ -7,8 +7,7 @@ import torch.optim as optim
 from .storageConSpec import RolloutStorage
 from .prototype import prototypes
 from .modelConSpec import EncoderConSpec
-import matplotlib.pyplot as plt
-
+from .utils import log_highest_cos_sim_obs
 
 
 def _flatten_helper(T, N, _tensor):
@@ -48,7 +47,7 @@ class ConSpec(nn.Module):
         self.seed = args.seed
         self.rollouts = RolloutStorage(args.max_episode_steps, self.num_procs, obsspace.shape,
                               self.encoder.recurrent_hidden_state_size, self.num_prototypes, args.SF_buffer_size)
-        self.prototypes = prototypes(input_size=self.encoder.recurrent_hidden_state_size, hidden_size=1010, 
+        self.prototypes = prototypes(input_size=self.encoder.recurrent_hidden_state_size, hidden_size=100, 
                                      num_prototypes=self.num_prototypes, device=device)
         self.device = device
         self.prototypes.to(device)
@@ -59,6 +58,7 @@ class ConSpec(nn.Module):
 
         self.listparams = list(self.encoder.parameters()) + list(self.prototypes.parameters())
         self.optimizerConSpec = optim.Adam(self.listparams, lr=args.lrConSpec, eps=args.eps)
+        self.update_counter = 0
 
     def store_memories(self,image_to_store, memory_to_store, action_to_store, reward_to_store, masks_to_store):
         '''stores the current minibatch of trajectories from the RL agent into the memory buffer for the current minibatch, as well as the success (pos) and failure (neg) memory buffers'''
@@ -127,7 +127,7 @@ class ConSpec(nn.Module):
                 if prototypes_used[j] > 0.5:
                     # print('frozen prototypes used', j, prototypes_used[j])
                     obs_batch, recurrent_hidden_states_batch, masks_batch, actions_batch, obs_batchorig, reward_batch = self.rollouts.retrieve_SFbuffer_frozen(
-                        j) # num_rollouts = 2*SF_buffer_size
+                        j) # num_rollouts = 2*SF_buffer_size. First half are successful rollouts, second half are failed rollouts
                 else:
                     # print('still using SF buffer not the frozen one')
                     obs_batch, recurrent_hidden_states_batch, masks_batch, actions_batch, obs_batchorig, reward_batch = self.rollouts.retrieve_SFbuffer()
@@ -138,13 +138,19 @@ class ConSpec(nn.Module):
                 costCL += cost_prototype
                 cos_scores_pos.append(cos_score_sf[0][j].detach().cpu())
                 cos_scores_neg.append(cos_score_sf[1][j].detach().cpu())
-                self.rollouts.cos_max_scores = cos_max_score
-                self.rollouts.max_indx = max_inds
-                # print('cos_max_score', cos_max_score)
-                # print('max_inds', max_inds)
-                self.rollouts.cos_scores = cos_scores
-                # self.rollouts.cos_score_pos = cos_score_sf[0]
-                # self.rollouts.cos_score_neg = cos_score_sf[1]
+                if prototypes_used[j] > 0.5:
+                    # save the cos_scores for the frozen prototypes
+                    self.rollouts.cos_sim[j] = {}
+                    self.rollouts.cos_sim[j]['cos_max_score'] = cos_max_score  # shape: torch.Size([num_rollouts, num_prototypes])
+                    self.rollouts.cos_sim[j]['max_inds'] = max_inds  # shape: torch.Size([num_rollouts, num_prototypes])
+                    self.rollouts.cos_sim[j]['cost_prototype'] = cost_prototype  # float
+                    self.rollouts.cos_sim[j]['cos_scores'] = cos_scores # shape: torch.Size([ep_length, num_rollouts, num_prototypes])
+                    self.rollouts.cos_sim[j]['cos_score_sf'] = cos_score_sf  # list of 2 tensors, each of shape torch.Size([num_prototypes])
+                    # log observation with highest cosine similarity score
+                    if (self.update_counter+1) % 5000 == 0:
+                        self.log_highest_cos_sim_obs(obs_batchorig[:, :obs_batchorig.shape[1]//2], cos_scores[:, :obs_batchorig.shape[1]//2, j], j)
+                torch.cuda.empty_cache()
+                del obs_batch, recurrent_hidden_states_batch, masks_batch, actions_batch, obs_batchorig, reward_batch, cos_max_score, max_inds, cost_prototype, cos_scores, cos_score_sf
 
             for i in range(self.num_prototypes):
                 if (cos_scores_pos[i] - cos_scores_neg[i] > self.cos_score_threshold) and cos_scores_pos[i] > self.cos_score_threshold:
@@ -157,8 +163,8 @@ class ConSpec(nn.Module):
             self.optimizerConSpec.zero_grad()
             costCL.backward()
             self.optimizerConSpec.step()
+            self.update_counter += 1
         self.rollouts.store_prototypes_used(prototypes_used, count_prototypes_timesteps_criterion)
-        torch.cuda.empty_cache()
         return costCL
 
     def do_everything(self, obstotal,  recurrent_hidden_statestotal, actiontotal,rewardtotal, maskstotal):

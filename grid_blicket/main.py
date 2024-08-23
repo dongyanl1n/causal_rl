@@ -51,9 +51,9 @@ def main():
     #========================================================================
 
     #========================= for single wandb job ==============================
-    wandb.init(project="blicket_objects_env", 
+    wandb.init(project=f"{args.env_name}-conspec", 
             entity="dongyanl1n", 
-            name=f"{args.env_name}-conspec{'-rec' if args.recurrent_policy else ''}-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-num_mini_batch{args.num_mini_batch}-seed{args.seed}",
+            name=f"conspec{'-rec' if args.recurrent_policy else ''}-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-seed{args.seed}",
             dir=os.environ.get('SLURM_TMPDIR', '/network/scratch/l/lindongy/blicket_objects_env/policy'),
             config=args)
     #========================================================================
@@ -61,7 +61,7 @@ def main():
     # create folder for checkpoints
     if args.save_checkpoint:
         base_directory = "/network/scratch/l/lindongy/blicket_objects_env/policy/conspec_ckpt"
-        subfolder_name = f"{args.env_name}-conspec{'-rec' if args.recurrent_policy else ''}-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-num_mini_batch{args.num_mini_batch}-seed{args.seed}"
+        subfolder_name = f"conspec{'-rec' if args.recurrent_policy else ''}-lr{args.lr}-intrinsR{args.intrinsicR_scale}-lrConSpec{args.lrConSpec}-entropy{args.entropy_coef}-seed{args.seed}"
         full_path = os.path.join(base_directory, subfolder_name)
         os.makedirs(full_path, exist_ok=True)
 
@@ -72,11 +72,12 @@ def main():
     torch.set_num_threads(1)
     device = torch.device("cuda:0" if args.cuda else "cpu")
 
-    envs = make_vec_envs(args.env_name, args.seed, args.num_processes,
-                     args.gamma, args.log_dir, device, True,
+    envs, max_episode_steps = make_vec_envs(args.env_name, args.seed, args.num_processes,
+                     args.log_dir, device, True,
                      max_episode_steps=args.max_episode_steps,
                      size=args.env_size)
-    max_steps = args.max_episode_steps
+    max_steps = max_episode_steps
+    args.max_episode_steps = max_episode_steps
     obsspace = envs.observation_space
     actionspace = envs.action_space
     print('obsspace.shape', obsspace.shape)
@@ -113,6 +114,16 @@ def main():
     elif args.algo == 'acktr':
         agent = algo.A2C_ACKTR(
             actor_critic, args.value_loss_coef, args.entropy_coef, acktr=True)
+    
+    # ================= load actor_critics from checkpoint =================
+    # Load checkpoint
+    # checkpoint_path = "/network/scratch/l/lindongy/blicket_objects_env/policy/conspec_ckpt/MiniWorld-PutNext-v0-conspec-lr0.0007-intrinsR0.5-lrConSpec0.002-entropy0.02-seed2/model_checkpoint_epoch_9999.pth"
+    # checkpoint = torch.load(checkpoint_path, map_location=device)
+    # # Load state dictionaries
+    # actor_critic.load_state_dict(checkpoint['actor_critic_state_dict'])
+    # agent.optimizer.load_state_dict(checkpoint['optimizer_ppo_state_dict'])
+    # print(f"Loaded actor_critic from {checkpoint_path}")
+    # =============================================================
 
     ###############CONSPEC FUNCTIONS##############################
     '''
@@ -120,6 +131,14 @@ def main():
     '''
     conspecfunction = ConSpec(args, obsspace, actionspace, device)
     ##############################################################
+    # =============== load conspec from checkpoint =================
+    # conspecfunction.encoder.load_state_dict(checkpoint['encoder_state_dict'])
+    # conspecfunction.prototypes.prototypes.load_state_dict(checkpoint['prototypes'])
+    # conspecfunction.prototypes.layers1.load_state_dict(checkpoint['layers1'])
+    # conspecfunction.prototypes.layers2.load_state_dict(checkpoint['layers2'])
+    # conspecfunction.optimizerConSpec.load_state_dict(checkpoint['optimizer_conspec_state_dict'])
+    # print(f"Loaded ConSpec from {checkpoint_path}")
+    # =============================================================
     print('steps', max_steps)
     rollouts = RolloutStorage(max_steps, args.num_processes,
                               obsspace.shape, 
@@ -208,7 +227,7 @@ def main():
         value_loss, action_loss, dist_entropy = agent.update(rollouts)  # update actor_critic based on returns and value_preds
 
         rollouts.after_update()  # last step becomes first step of next rollout
-
+        torch.cuda.empty_cache()
         ############# Log and save #################
         if (j % args.log_interval == 0 and len(episode_rewards) > 1) or j == num_updates - 1:
             total_num_steps = (j + 1) * args.num_processes * max_steps
@@ -237,7 +256,7 @@ def main():
         
         # save checkpoint
         if args.save_checkpoint:
-            if ((j+1) % args.save_interval == 0 or j == num_updates - 1) and not checkpoint_saved and np.mean(episode_rewards)> 9.5:
+            if j == num_updates - 1:
                 buffer = {
                     'obs': rollouts.obs,
                     'rewards': rollouts.rewards,
@@ -281,13 +300,7 @@ def main():
                     'layers1': conspecfunction.prototypes.layers1.state_dict(),
                     'layers2': conspecfunction.prototypes.layers2.state_dict(),
                     }
-                cos_checkpoint = {
-                    'cos_max_scores' : conspecfunction.rollouts.cos_max_scores, 
-                    'max_indices' : conspecfunction.rollouts.max_indx,
-                    'cos_scores' : conspecfunction.rollouts.cos_scores,
-                    # 'cos_success' : conspecfunction.rollouts.cos_score_pos,
-                    # 'cos_failure' : conspecfunction.rollouts.cos_score_neg,
-                }
+                cos_checkpoint = conspecfunction.rollouts.cos_sim
                         
                 print(f'saving checkpoints for epoch {j}...')
                 checkpoint_path = os.path.join(full_path, f'model_checkpoint_epoch_{j}.pth')

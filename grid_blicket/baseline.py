@@ -44,7 +44,7 @@ def main():
     device = torch.device("cuda:0" if args.cuda else "cpu")
 
     envs = make_vec_envs(args.env_name, args.seed, args.num_processes,
-                     args.gamma, args.log_dir, device, True,
+                     args.log_dir, device, True,
                      max_episode_steps=args.max_episode_steps,
                      size=args.env_size)
     max_steps = args.max_episode_steps
@@ -169,20 +169,17 @@ def main():
         value_loss, action_loss, dist_entropy = agent.update(rollouts)
 
         rollouts.after_update()
-
+        torch.cuda.empty_cache()
         ############# Log and save #################
         # Log stats every log_interval updates or if it is the last update
         if (j % args.log_interval == 0 and len(episode_rewards) > 1) or j == num_updates - 1:
             total_num_steps = (j + 1) * args.num_processes * max_steps
             end = time.time()
             # print(
-            #     "Updates {}, num timesteps {}, FPS {} \n Last {} training episodes: mean/median reward {:.1f}/{:.1f}, min/max reward {:.1f}/{:.1f}\n"
+            #     "Updates {}, num timesteps {}, FPS {} \n Last {} training episodes: mean reward {:.2f}, mean length {:.2f}\n"
             #     .format(j, total_num_steps,
             #             int(total_num_steps / (end - start)),
-            #             len(episode_rewards), np.mean(episode_rewards),
-            #             np.median(episode_rewards), np.min(episode_rewards),
-            #             np.max(episode_rewards), dist_entropy, value_loss,
-            #             action_loss))
+            #             len(episode_rewards), np.mean(episode_rewards), np.mean(episode_lengths)))
             wandb.log({
                 'Epoch': j,
                 'total_num_steps': total_num_steps,

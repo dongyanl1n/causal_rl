@@ -55,7 +55,7 @@ class prototypes(nn.Module):
         costfinal = loss_cos * 1. + (loss_ortho * loss_ortho_scale) /self.num_prototypes
         success_scores = torch.abs(cos_max[:success_inds]).mean(0)
         fail_scores = torch.abs(cos_max[success_inds:]).mean(0)
-
+        del out1, ortho, ortho_scores, ortho_scores_diag
         return cos_max, indices, costfinal, cos_scores, [success_scores, fail_scores]
 
 

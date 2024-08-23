@@ -1,6 +1,6 @@
 import torch
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
-
+from  .utils import log_episode_video
 
 def _flatten_helper(T, N, _tensor):
     return _tensor.view(T * N, *_tensor.size()[2:])
@@ -35,9 +35,7 @@ class RolloutStorage(object):
         self.actions = torch.zeros(num_steps, num_processes, action_shape)
         self.actions = self.actions.long()
         self.masks = torch.ones(num_steps + 1, num_processes, 1)
-        self.max_indx = None  # to be assigned when conspec is updated
-        self.cos_scores = None
-        self.cos_max_scores= None
+        self.cos_sim = {}  # to be assigned when conspec is updated
 
         # Masks that indicate whether it's a true terminal state
         # or time limit end state
@@ -51,7 +49,7 @@ class RolloutStorage(object):
         self.recurrent_hidden_state_size = recurrent_hidden_state_size
         self.num_prototypes = num_prototypes
         self.success = SF_buffer_size
-        self.success_sample = SF_buffer_size
+        self.success_sample = SF_buffer_size // 2
 
         self.obs_batchS = torch.zeros(self.num_steps + 1, self.success, *self.obs_shape)
         self.r_batchS = torch.zeros(self.num_steps, self.success, 1)
@@ -140,14 +138,14 @@ class RolloutStorage(object):
         totalreward = self.rewards.sum(0)  # use sum of rewards across the timesteps as the total reward
         # pos_cutoff = 10 - 0.01*self.rewards.shape[0]
         if S_or_F == 'pos':
-            rewardssortgood = torch.nonzero(totalreward >= 10-0.01*self.num_steps).reshape(-1, )
+            rewardssortgood = torch.nonzero(totalreward >= 0.5).reshape(-1, )
             indicesrewardbatch = rewardssortgood[0::2]
             obsxx = self.obs[:, indicesrewardbatch].to(device)  # obs from the good trajectories
             numberaddedxx = obsxx.shape[1]
             if numberaddedxx >1:
                 indicesrewardbatch = rewardssortgood[0:4:2]
         else:
-            rewardssortbad = torch.nonzero(totalreward < 10-0.01*self.num_steps).reshape(-1, )
+            rewardssortbad = torch.nonzero(totalreward < 0.5).reshape(-1, )
             indicesrewardbatch = rewardssortbad[0::2]
         obs = self.obs[:, indicesrewardbatch].to(device)
         rec = self.recurrent_hidden_states[:, indicesrewardbatch].to(device)
@@ -168,6 +166,9 @@ class RolloutStorage(object):
             if numberadded + numcareabout <= self.obs_batchS.shape[1]:
                 if S_or_F == 'pos':
                     # print(f"adding {numberadded} to pos buffer")
+                    # log the episode video
+                    for i_epi in range(obs.shape[1]):
+                        log_episode_video(obs[:, i_epi], self.stepS+i_epi, caption=f'Episode reward: {rew[:, i_epi].sum(0).item()}')
                     self.obs_batchS[:, self.stepS:self.stepS + numberadded] = obs
                     self.r_batchS[:, self.stepS:self.stepS + numberadded] = rew
                     self.recurrent_hidden_statesS[:, self.stepS:self.stepS + numberadded] = rec

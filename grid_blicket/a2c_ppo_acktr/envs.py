@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import torch
+import gymnasium as gym
 from gymnasium import spaces
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
@@ -11,9 +12,27 @@ from stable_baselines3.common.vec_env.base_vec_env import VecEnvWrapper
 
 from blicketobjects_env import BlicketObjectsEnv  # Import your custom environment
 
+def get_env_max_steps(env_id, max_episode_steps, size):
+    if env_id == 'BlicketObjectsEnv':
+        env = BlicketObjectsEnv(size=size, max_episode_steps=max_episode_steps, render_mode='rgb_array')
+    elif env_id.startswith('MiniWorld'):
+        env = gym.make(env_id, render_mode='rgb_array')
+    else:
+        env = gym.make(env_id, render_mode='rgb_array')
+    
+    max_steps = getattr(env, 'max_episode_steps', max_episode_steps)
+    env.close()
+    return max_steps
+
 def make_env(env_id, seed, rank, log_dir, allow_early_resets, max_episode_steps, size):
     def _thunk():
-        env = BlicketObjectsEnv(size=size, max_episode_steps=max_episode_steps, render_mode='rgb_array')
+        if env_id == 'BlicketObjectsEnv':
+            env = BlicketObjectsEnv(size=size, max_episode_steps=max_episode_steps, render_mode='rgb_array')
+        elif env_id.startswith('MiniWorld'):
+            env = gym.make(env_id, render_mode='rgb_array')
+        else:
+            env = gym.make(env_id, render_mode='rgb_array')
+        
         if log_dir is not None:
             env = Monitor(env,
                           os.path.join(log_dir, str(rank)),
@@ -24,7 +43,6 @@ def make_env(env_id, seed, rank, log_dir, allow_early_resets, max_episode_steps,
 def make_vec_envs(env_name,
                   seed,
                   num_processes,
-                  gamma,
                   log_dir,
                   device,
                   allow_early_resets,
@@ -42,11 +60,7 @@ def make_vec_envs(env_name,
         envs = DummyVecEnv(envs)
 
     if len(envs.observation_space.shape) == 3:
-        if gamma is None:
-            envs = VecNormalize(envs, norm_obs=False, norm_reward=False)
-        else:
-            envs = VecNormalize(envs, norm_obs=False, gamma=gamma)
-        
+        envs = VecNormalize(envs, norm_obs=False, norm_reward=False)
         envs = VecTransposeImage(envs)
 
     envs = VecPyTorch(envs, device)
@@ -54,8 +68,10 @@ def make_vec_envs(env_name,
     if num_frame_stack is not None:
         envs = VecPyTorchFrameStack(envs, num_frame_stack, device)
 
-    return envs
+    # Get max_episode_steps using the separate function
+    max_steps = get_env_max_steps(env_name, max_episode_steps, size)
 
+    return envs, max_steps
 
 
 class VecPyTorch(VecEnvWrapper):

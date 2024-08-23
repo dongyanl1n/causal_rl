@@ -62,11 +62,6 @@ def get_args():
         default=8,
         help='how many training CPU processes to use, must be greater than num-mini-batch (default: 8)')
     parser.add_argument(
-        '--num-steps',
-        type=int,
-        default=5,
-        help='number of steps in each rollout (default: 5)')
-    parser.add_argument(
         '--ppo-epoch',
         type=int,
         default=4,
@@ -81,6 +76,10 @@ def get_args():
         type=float,
         default=0.2,
         help='ppo clip parameter (default: 0.2)')
+    parser.add_argument(
+        '--log-dir',
+        default='/tmp/gym/',
+        help='directory to save agent logs (default: /tmp/gym)')
     parser.add_argument(
         '--log-interval',
         type=int,
@@ -109,7 +108,7 @@ def get_args():
     parser.add_argument(
         '--recurrent-policy',
         action='store_true',
-        default=True,
+        default=False,
         help='use a recurrent policy')
     parser.add_argument(
         '--use-linear-lr-decay',
@@ -118,27 +117,25 @@ def get_args():
         help='use a linear schedule on the learning rate')
 
     ####################################
-    # Arguments pertaining to MultiKeyDoorEnv
+    # Arguments pertaining to BlicketObjectsEnv
     ####################################
     parser.add_argument(
         '--env-name',
-        default='MultiDoorKeyEnv-8x8-2keys-v0',
-        help='environment to train on (default: MultiDoorKeyEnv-8x8-2keys-v0)')
+        default='BlicketObjectsEnv',
+        help='environment to train on (default: BlicketObjectsEnv)')
+    #max_episode_steps
     parser.add_argument(
-        '--fixed_positions', 
-        default=False,
-        action='store_true',
-        help='Whether to keep key and door positions fixed across resets')
+        '--max_episode_steps',
+        type=int,
+        default=500,
+        help='maximum number of steps per episode')
+    #size
     parser.add_argument(
-        '--fully_observed', 
-        action='store_true', 
-        help='Use fully observed wrapper for the environment')
-    parser.add_argument(
-        '--max_steps', 
-        type=int, 
-        default=None, 
-        help='Maximum number of steps per episode')
-
+        '--env_size',
+        type=int,
+        default=10,
+        help='size of the environment')
+    
 
     ####################################
     # Arguments pertaining to ConSpec
