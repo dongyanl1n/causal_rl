@@ -25,7 +25,7 @@ class Flatten(nn.Module):
         return input.view(input.size(0), -1)
 
 
-def log_episode_video(episode_obs, episode_number):
+def log_episode_video(episode_obs, episode_number, caption=None):
     """
     Logs a video of the episode's observations to wandb.
     
@@ -33,9 +33,9 @@ def log_episode_video(episode_obs, episode_number):
     episode_obs (torch.Tensor): Tensor of shape (T, 3, 60, 80) containing the episode's observations.
     episode_number (int): The number or identifier of the episode.
     """
-    episode_obs = episode_obs.cpu().numpy()
-    episode_obs = episode_obs.astype(np.uint8)
-    video = wandb.Video(episode_obs)
+    # obs is numpy array of shape (T, 3, 60, 80), dtype=np.uint8
+    video = wandb.Video(episode_obs,
+                        caption=caption)
     wandb.log({f"episode_{episode_number}_video": video})
     print(f"Video for episode {episode_number} has been logged to wandb.")
 
@@ -94,10 +94,10 @@ def main():
         "env_name": args.env_name,
         "load_model_name": args.load_model_name,
     }
-    run = wandb.init(
-        project="MiniWorld_PutNext_easy_sb3", 
+    wandb.init(
+        project=f"{args.env_name}_sb3", 
         entity="dongyanl1n",
-        name=f"sb3-{args.env_name}_lr{args.lr}{'_load_'+args.load_model_name if args.load_model_name != 'None' else ''}",
+        name=f"lr{args.lr}{'_load_'+args.load_model_name if args.load_model_name != 'None' else ''}",
         config=config,
         sync_tensorboard=True,
         dir="/network/scratch/l/lindongy/blicket_objects_env/policy"
@@ -111,8 +111,9 @@ def main():
     # env = VecTransposeImage(env)
     env = gym.make(args.env_name)
     env = PyTorchObsWrapper(env)
-    # TODO: try just using env = gym.make("MiniWorld-SimToReal1-v0") & env = PyTorchObsWrapper(env), from miniworld.wrappers import PyTorchObsWrapper 
-
+    # Check the observation space
+    print(f"Observation space: {env.observation_space}")
+    
     # Initialize the PPO agent with GPU support
     print("Initializing PPO agent...")
     policy_kwargs = dict(
@@ -133,27 +134,28 @@ def main():
     model.learn(total_timesteps=total_timesteps,
                 callback=WandbCallback(verbose=0))
     
-    # Finish the wandb run
-    run.finish()
-
+    
     # Save the trained model
-    model.save(f"ppo_{args.env_name}")
+    # model.save(f"ppo_{args.env_name}")
 
     # Test the trained agent, logging a video of the episode
-    obs = env.reset()
-    test_episodes = 1
+    obs, _ = env.reset()  # Unpack the tuple returned by reset
+    test_episodes = 5
     for i in range(test_episodes):
         episode_obs = []
         episode_reward = 0
-        done = False
-        while not done:
+        terminated = False
+        truncated = False
+        while not (terminated or truncated):
             action, _states = model.predict(obs, deterministic=True)
-            obs, reward, done, info = env.step(action)
-            episode_obs.append(obs)
+            obs, reward, terminated, truncated, info = env.step(action)
+            episode_obs.append(np.transpose(obs, (0, 2, 1)))
             episode_reward += reward
-        episode_obs = torch.stack(episode_obs)
-        log_episode_video(episode_obs, i)
+        episode_obs = np.stack(episode_obs)
+        log_episode_video(episode_obs, i, caption=f"Testing Episode {i}, reward: {episode_reward}")
         print(f"Testing Episode {i} reward: {episode_reward}")
+
+    wandb.finish()
 
     env.close()
 
