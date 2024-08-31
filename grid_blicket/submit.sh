@@ -1,26 +1,23 @@
 #!/bin/bash
-#SBATCH --job-name=emptyenv
-#SBATCH --output=/network/scratch/l/lindongy/emptyenv/sbatch_log/%j_%a.out
-#SBATCH --error=/network/scratch/l/lindongy/emptyenv/sbatch_log/%j_%a.err
+#SBATCH --job-name=putnexteasy
+#SBATCH --output=/network/scratch/l/lindongy/blicket_objects_env/sbatch_log/putnexteasy_%j.out
+#SBATCH --error=/network/scratch/l/lindongy/blicket_objects_env/sbatch_log/putnexteasy_%j.err
 #SBATCH --partition=long
-#SBATCH --mem=4G
-#SBATCH --gres=gpu:rtx8000:1
-#SBATCH --array=1-4
+#SBATCH --time=1-00:00:00
+#SBATCH --mem=32G
+#SBATCH --gres=gpu:a100l:1
 
 module load python/3.7
 source $HOME/envs/causal_rl/bin/activate
 
-case $SLURM_ARRAY_TASK_ID in
-  1)
-    python emptyenv.py --lr 1e-4 --total_timesteps 2e6 --env MiniGrid-Empty-Random-6x6-v0
-    ;;
-  2)
-    python emptyenv.py --lr 5e-5 --total_timesteps 2e6 --env MiniGrid-Empty-Random-6x6-v0
-    ;;
-  3)
-    python emptyenv.py --lr 1e-4 --total_timesteps 2e6 --env MiniGrid-Empty-16x16-v0
-    ;;
-  4)
-    python emptyenv.py --lr 5e-5 --total_timesteps 2e6 --env MiniGrid-Empty-16x16-v0
-    ;;
-esac
+xvfb-run -a -s "-screen 0 1024x768x24 -ac +extension GLX +render -noreset" python main.py --env-name MiniWorld-PutNext-v0 \
+    --use-linear-lr-decay \
+    --lr 0.0007 \
+    --num-processes 4 \
+    --entropy-coef 0.02 \
+    --num-mini-batch 4 \
+    --num-epochs 2000 \
+    --intrinsicR_scale 0.5 \
+    --lrConSpec 0.002 \
+    --save_checkpoint \
+    --seed 1
